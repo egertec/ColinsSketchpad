@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { supabase } from '@/lib/supabase';
 import {
   getExerciseLogs, getNutritionLogs, getCoachInstructions, addCoachInstruction, getUserProfile,
 } from '@/lib/storage';
@@ -21,8 +22,26 @@ export function useAutoGenerate() {
   useEffect(() => {
     if (ran.current) return;
     ran.current = true;
-    runAutoGen();
+    // Wait for auth session to be fully ready before calling Edge Functions
+    waitForSessionThenRun();
   }, []);
+
+  async function waitForSessionThenRun() {
+    // Give Supabase client time to restore the session from storage
+    let attempts = 0;
+    while (attempts < 10) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        runAutoGen();
+        return;
+      }
+      await new Promise(r => setTimeout(r, 500));
+      attempts++;
+    }
+    // Session never became available — skip auto-gen silently
+    console.warn('Auto-gen skipped: no auth session after waiting');
+    setStatus('idle');
+  }
 
   async function runAutoGen() {
     setStatus('checking');

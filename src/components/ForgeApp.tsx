@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import DashboardTab from '@/components/DashboardTab';
 import LogTab from '@/components/LogTab';
 import HistoryTab from '@/components/HistoryTab';
@@ -28,6 +29,7 @@ export default function ForgeApp() {
       {/* Header */}
       <div className="px-6 pt-4 pb-2 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
+          <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm mr-1">←</Link>
           <div className="w-7 h-7 rounded-lg accent-gradient flex items-center justify-center">
             <span className="text-white text-[11px] font-bold" style={{ fontFamily: "'Cormorant Garamond', serif" }}>F</span>
           </div>
