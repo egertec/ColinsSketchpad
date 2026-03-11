@@ -1,16 +1,16 @@
-import { supabase } from './supabase';
+import { supabase, supabaseUrl, supabaseAnonKey } from './supabase';
 import type { ExerciseEntry, NutritionEntry, CoachInstruction, UserProfile, ActivityType } from './storage';
 
 async function callClaude(system: string, userMsg: string, maxTokens = 2000): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || '';
 
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
   const res = await fetch(`${supabaseUrl}/functions/v1/ai-proxy`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`,
+      'apikey': supabaseAnonKey,
     },
     body: JSON.stringify({ system, userMsg, maxTokens }),
   });
