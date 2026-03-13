@@ -3,9 +3,9 @@ import { supabase } from '@/lib/supabase';
 import {
   getExerciseLogs, getNutritionLogs, getCoachInstructions, addCoachInstruction, getUserProfile,
 } from '@/lib/storage';
-import { generateWeeklyPlan, generateDailyBriefing } from '@/lib/ai-service';
+import { generateWeeklyPlan } from '@/lib/ai-service';
 
-export type AutoGenStatus = 'idle' | 'checking' | 'generating-weekly' | 'generating-daily' | 'done' | 'error';
+export type AutoGenStatus = 'idle' | 'checking' | 'generating-weekly' | 'done' | 'error';
 
 function getWeekMonday(date: Date): string {
   const d = new Date(date);
@@ -22,12 +22,10 @@ export function useAutoGenerate() {
   useEffect(() => {
     if (ran.current) return;
     ran.current = true;
-    // Wait for auth session to be fully ready before calling Edge Functions
     waitForSessionThenRun();
   }, []);
 
   async function waitForSessionThenRun() {
-    // Give Supabase client time to restore the session from storage
     let attempts = 0;
     while (attempts < 10) {
       const { data: { session } } = await supabase.auth.getSession();
@@ -38,7 +36,6 @@ export function useAutoGenerate() {
       await new Promise(r => setTimeout(r, 500));
       attempts++;
     }
-    // Session never became available — skip auto-gen silently
     console.warn('Auto-gen skipped: no auth session after waiting');
     setStatus('idle');
   }
@@ -68,25 +65,7 @@ export function useAutoGenerate() {
         } catch (e) { console.error('Auto-gen weekly failed:', e); }
       }
 
-      const dailyBriefings = instructions.filter(i => i.type === 'daily');
-      const hasTodayBriefing = dailyBriefings.some(b => b.date === todayStr);
-
-      if (!hasTodayBriefing) {
-        setStatus('generating-daily');
-        try {
-          const freshInstructions = await getCoachInstructions();
-          const weeklyForDaily = freshInstructions.filter(i => i.type === 'weekly').sort((a, b) => b.date.localeCompare(a.date))[0] || null;
-          const body = await generateDailyBriefing(exercises, nutrition, weeklyForDaily, profile);
-          const dayName = today.toLocaleDateString('en-US', { weekday: 'long' });
-          await addCoachInstruction({
-            date: todayStr, type: 'daily',
-            title: `${dayName} Briefing — ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
-            body,
-          });
-        } catch (e) { console.error('Auto-gen daily failed:', e); }
-      }
-
-      if (hasThisWeekPlan && hasTodayBriefing) { setStatus('idle'); }
+      if (hasThisWeekPlan) { setStatus('idle'); }
       else { setStatus('done'); setTimeout(() => setStatus('idle'), 3500); }
     } catch (e) {
       console.error('Auto-gen error:', e);

@@ -19,7 +19,7 @@ export default function ForgeApp() {
   const [tab, setTab] = useState<Tab>('dashboard');
   const { status } = useAutoGenerate();
 
-  const isGenerating = status === 'generating-weekly' || status === 'generating-daily';
+  const isGenerating = status === 'generating-weekly';
   const isDone = status === 'done';
   const isError = status === 'error';
   const showBanner = isGenerating || isDone || isError;
@@ -56,8 +56,7 @@ export default function ForgeApp() {
           {isError && <span className="shrink-0">✕</span>}
           <span className="font-medium">
             {status === 'generating-weekly' && 'Generating your weekly plan…'}
-            {status === 'generating-daily' && "Preparing today's briefing…"}
-            {isDone && 'Plans updated — check Coach'}
+            {isDone && 'Weekly plan updated — check Coach'}
             {isError && 'Generation failed — try manually'}
           </span>
         </div>

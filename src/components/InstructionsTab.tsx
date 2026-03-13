@@ -1,15 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getExerciseLogs, getNutritionLogs, getCoachInstructions, addCoachInstruction, deleteCoachInstruction,
   getUserProfile, saveUserProfile, DEFAULT_PROFILE,
   type CoachInstruction, type ExerciseEntry, type NutritionEntry, type UserProfile,
 } from '@/lib/storage';
-import { generateWeeklyPlan, generateDailyBriefing } from '@/lib/ai-service';
+import { generateWeeklyPlan } from '@/lib/ai-service';
 
 const COACH_IMG = 'https://images.unsplash.com/photo-1549060279-7e168fcee0c2?w=800&q=80&auto=format&fit=crop';
 const PLAN_IMG = 'https://images.unsplash.com/photo-1576678927484-cc907957088c?w=600&q=80&auto=format&fit=crop';
@@ -100,25 +98,12 @@ export default function InstructionsTab() {
     } catch (e: any) { setError(e.message || 'Failed.'); } finally { setGenerating(null); }
   }
 
-  async function genDaily() {
-    setGenerating('daily'); setError(null);
-    try {
-      const wp = instructions.filter(i => i.type === 'weekly').sort((a, b) => b.date.localeCompare(a.date));
-      const body = await generateDailyBriefing(exercises, nutrition, wp[0] || null, profile);
-      const today = new Date();
-      const inst = await addCoachInstruction({ date: today.toISOString().split('T')[0], type: 'daily',
-        title: `${today.toLocaleDateString('en-US', { weekday: 'long' })} Briefing — ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`, body });
-      setInstructions(prev => [inst, ...prev]); setSelected(inst);
-    } catch (e: any) { setError(e.message || 'Failed.'); } finally { setGenerating(null); }
-  }
-
   async function handleDel(id: string) { await deleteCoachInstruction(id); setInstructions(prev => prev.filter(i => i.id !== id)); setSelected(null); }
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   if (selected) return <div className="pb-4 fade-up"><DetailView inst={selected} onBack={() => setSelected(null)} onDelete={() => handleDel(selected.id)} /></div>;
 
   const wk = instructions.filter(i => i.type === 'weekly');
-  const dl = instructions.filter(i => i.type === 'daily');
 
   return (
     <div className="space-y-5 pb-4">
@@ -173,53 +158,37 @@ export default function InstructionsTab() {
         )}
       </div>
 
-      {/* Generate with image */}
-      <div className="grid grid-cols-2 gap-3 fade-up d2">
+      {/* Generate */}
+      <div className="fade-up d2">
         <button onClick={genWeekly} disabled={generating !== null}
-          className="relative overflow-hidden rounded-xl text-left disabled:opacity-50" style={{ height: '100px' }}>
+          className="relative overflow-hidden rounded-xl text-left disabled:opacity-50 w-full" style={{ height: '100px' }}>
           <img src={PLAN_IMG} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" />
           <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/40 to-black/20" />
           <div className="relative h-full flex flex-col justify-end p-3.5">
             {generating === 'weekly'
               ? <span className="flex items-center gap-2 text-[12px] font-semibold text-white"><span className="w-3 h-3 border-[1.5px] border-white border-t-transparent rounded-full animate-spin" />Generating…</span>
-              : <><p className="text-white text-[12px] font-semibold">📋 Weekly Plan</p><p className="text-white/60 text-[9px] mt-0.5 leading-snug">7-day training + nutrition</p></>
+              : <><p className="text-white text-[12px] font-semibold">📋 Generate Weekly Plan</p><p className="text-white/60 text-[9px] mt-0.5 leading-snug">7-day training + nutrition plan tailored to your profile</p></>
             }
           </div>
-        </button>
-        <button onClick={genDaily} disabled={generating !== null}
-          className="card-elevated rounded-xl p-3.5 text-left hover:shadow-md transition-shadow disabled:opacity-50 flex flex-col justify-end" style={{ height: '100px' }}>
-          {generating === 'daily'
-            ? <span className="flex items-center gap-2 text-[12px] font-semibold"><span className="w-3 h-3 border-[1.5px] border-primary border-t-transparent rounded-full animate-spin" />Generating…</span>
-            : <><p className="text-[12px] font-semibold">◆ Daily Briefing</p><p className="text-muted-foreground text-[9px] mt-0.5 leading-snug">Today's workout + review</p></>
-          }
         </button>
       </div>
 
       {error && <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 fade-up"><p className="text-sm text-red-600">{error}</p></div>}
 
       {/* List */}
-      <Tabs defaultValue="all" className="fade-up d3">
-        <TabsList className="w-full bg-muted/60 rounded-xl p-1 h-auto">
-          <TabsTrigger value="all" className="flex-1 text-[11px] rounded-lg py-1.5 font-semibold">All ({instructions.length})</TabsTrigger>
-          <TabsTrigger value="weekly" className="flex-1 text-[11px] rounded-lg py-1.5 font-semibold">Weekly ({wk.length})</TabsTrigger>
-          <TabsTrigger value="daily" className="flex-1 text-[11px] rounded-lg py-1.5 font-semibold">Daily ({dl.length})</TabsTrigger>
-        </TabsList>
-        {(['all', 'weekly', 'daily'] as const).map(tab => (
-          <TabsContent key={tab} value={tab} className="mt-4">
-            {(() => {
-              const items = tab === 'all' ? instructions : tab === 'weekly' ? wk : dl;
-              if (items.length === 0) return (
-                <div className="card-elevated rounded-xl py-14 text-center">
-                  <p className="font-display text-4xl mb-3">{tab === 'weekly' ? '📋' : tab === 'daily' ? '◆' : '◎'}</p>
-                  <h3 className="font-display text-lg font-semibold mb-1">No Instructions Yet</h3>
-                  <p className="text-sm text-muted-foreground max-w-[260px] mx-auto">Generate your first plan above.</p>
-                </div>
-              );
-              return <div className="space-y-2">{items.map(i => <InstCard key={i.id} inst={i} onClick={() => setSelected(i)} />)}</div>;
-            })()}
-          </TabsContent>
-        ))}
-      </Tabs>
+      {/* Weekly Plans List */}
+      <div className="fade-up d3">
+        <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold mb-3">Weekly Plans ({wk.length})</p>
+        {wk.length === 0 ? (
+          <div className="card-elevated rounded-xl py-14 text-center">
+            <p className="font-display text-4xl mb-3">📋</p>
+            <h3 className="font-display text-lg font-semibold mb-1">No Plans Yet</h3>
+            <p className="text-sm text-muted-foreground max-w-[260px] mx-auto">Generate your first weekly plan above.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">{wk.map(i => <InstCard key={i.id} inst={i} onClick={() => setSelected(i)} />)}</div>
+        )}
+      </div>
     </div>
   );
 }
