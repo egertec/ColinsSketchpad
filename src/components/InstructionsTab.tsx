@@ -76,7 +76,10 @@ export default function InstructionsTab() {
   async function load() {
     const [inst, ex, nu, prof] = await Promise.all([getCoachInstructions(), getExerciseLogs(), getNutritionLogs(), getUserProfile()]);
     setInstructions(inst.sort((a, b) => b.date.localeCompare(a.date)));
-    setExercises(ex); setNutrition(nu); setProfile(prof); setDraft(prof); setLoading(false);
+    setExercises(ex); setNutrition(nu); setProfile(prof);
+    // Only update draft if user is NOT currently editing (prevents wiping typed text)
+    if (!editing) setDraft(prof);
+    setLoading(false);
   }
 
   async function saveProfile() {
