@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -65,6 +65,7 @@ export default function InstructionsTab() {
   const [nutrition, setNutrition] = useState<NutritionEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
   const [editing, setEditing] = useState(false);
+  const editingRef = useRef(false);
   const [draft, setDraft] = useState<UserProfile>(DEFAULT_PROFILE);
   const [profileSaved, setProfileSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -72,13 +73,16 @@ export default function InstructionsTab() {
   const [selected, setSelected] = useState<CoachInstruction | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Keep ref in sync with editing state so the interval callback can read it
+  useEffect(() => { editingRef.current = editing; }, [editing]);
+
   useEffect(() => { load(); const iv = setInterval(load, 5000); return () => clearInterval(iv); }, []);
   async function load() {
     const [inst, ex, nu, prof] = await Promise.all([getCoachInstructions(), getExerciseLogs(), getNutritionLogs(), getUserProfile()]);
     setInstructions(inst.sort((a, b) => b.date.localeCompare(a.date)));
     setExercises(ex); setNutrition(nu); setProfile(prof);
     // Only update draft if user is NOT currently editing (prevents wiping typed text)
-    if (!editing) setDraft(prof);
+    if (!editingRef.current) setDraft(prof);
     setLoading(false);
   }
 
