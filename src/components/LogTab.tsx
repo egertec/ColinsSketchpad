@@ -19,7 +19,7 @@ const MEAL_TAGS: { id: 'breakfast' | 'lunch' | 'dinner' | 'snack'; label: string
   { id: 'dinner', label: '🍖 Dinner' }, { id: 'snack', label: '🍎 Snack' },
 ];
 
-interface SectionInput { id: TagId; text: string; }
+interface QueuedEntry { id: string; label: string; text: string; date: string; timestamp: number; }
 interface RecentLog { id: string; summary: string; feedback: string; timestamp: number; }
 
 const PH: Partial<Record<TagId, string>> = {
@@ -32,16 +32,25 @@ const PH: Partial<Record<TagId, string>> = {
   dinner: 'Pesto pasta with chicken, tomatoes, parmesan', snack: 'Greek yogurt with berries, protein shake',
 };
 
+const QUEUE_KEY = 'forge-log-queue';
+
+function loadQueue(): QueuedEntry[] {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; }
+}
+function saveQueue(q: QueuedEntry[]) { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); }
+
 export default function LogTab() {
   const [selectedTags, setSelectedTags] = useState<TagId[]>([]);
-  const [sections, setSections] = useState<SectionInput[]>([]);
+  const [sections, setSections] = useState<{ id: TagId; text: string }[]>([]);
   const [freeform, setFreeform] = useState('');
+  const [queue, setQueue] = useState<QueuedEntry[]>(loadQueue);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recentLogs, setRecentLogs] = useState<RecentLog[]>([]);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [todayP, setTodayP] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
   const freeRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { loadCtx(); }, [recentLogs]);
@@ -60,6 +69,11 @@ export default function LogTab() {
     });
   }
   function updateSection(id: TagId, text: string) { setSections(prev => prev.map(s => s.id === id ? { ...s, text } : s)); }
+
+  function tagLabel(id: TagId): string {
+    return EXERCISE_TAGS.find(t => t.id === id)?.label || MEAL_TAGS.find(t => t.id === id)?.label || id;
+  }
+
   function buildInput(): string {
     const parts: string[] = [];
     for (const s of sections) { if (!s.text.trim()) continue; const isEx = EXERCISE_TAGS.some(t => t.id === s.id); parts.push(isEx ? `Exercise (${s.id}): ${s.text.trim()}` : `${s.id.charAt(0).toUpperCase() + s.id.slice(1)}: ${s.text.trim()}`); }
@@ -67,20 +81,56 @@ export default function LogTab() {
     return parts.join('\n\n');
   }
 
-  async function submit() {
+  // Add to queue (no API call)
+  function addToQueue() {
     const input = buildInput(); if (!input) return;
+    const labels = sections.filter(s => s.text.trim()).map(s => tagLabel(s.id));
+    if (freeform.trim() && labels.length === 0) labels.push('Freeform');
+    const entry: QueuedEntry = { id: `${Date.now()}`, label: labels.join(', '), text: input, date: entryDate, timestamp: Date.now() };
+    const updated = [...queue, entry];
+    setQueue(updated);
+    saveQueue(updated);
+    setSelectedTags([]); setSections([]); setFreeform('');
+    setEntryDate(new Date().toISOString().split('T')[0]); // reset to today
+  }
+
+  function removeFromQueue(id: string) {
+    const updated = queue.filter(q => q.id !== id);
+    setQueue(updated);
+    saveQueue(updated);
+  }
+
+  // Process entire queue — group by date, one API call per date bucket
+  async function processQueue() {
+    if (queue.length === 0 || !profile) return;
     setProcessing(true); setError(null);
     try {
-      const parsed = await parseNaturalLanguageLog(input, profile!);
-      for (const e of parsed.exercises) await addExerciseLog(e);
-      for (const m of parsed.meals) await addNutritionLog(m);
+      // Group by explicit date so each date is processed as one prompt
+      const byDate = queue.reduce<Record<string, QueuedEntry[]>>((acc, q) => {
+        const d = q.date || new Date().toISOString().split('T')[0];
+        (acc[d] = acc[d] || []).push(q);
+        return acc;
+      }, {});
+
+      let totalExercises = 0, totalMeals = 0, lastFeedback = '';
+      for (const [date, group] of Object.entries(byDate)) {
+        const combined = group.map((q, i) => `--- Entry ${i + 1} (${q.label}) ---\n${q.text}`).join('\n\n');
+        const parsed = await parseNaturalLanguageLog(combined, profile);
+        for (const e of parsed.exercises) await addExerciseLog({ ...e, date });
+        for (const m of parsed.meals) await addNutritionLog({ ...m, date });
+        totalExercises += parsed.exercises.length;
+        totalMeals += parsed.meals.length;
+        lastFeedback = parsed.feedback;
+      }
+
       const parts: string[] = [];
-      if (parsed.exercises.length > 0) parts.push(parsed.exercises.map(e => `${e.activityType}: ${e.workoutType} (${e.duration}min)`).join(', '));
-      if (parsed.meals.length > 0) parts.push(parsed.meals.map(m => `${m.mealType}: ${m.calories}cal, ${m.protein}gP`).join(' · '));
+      if (totalExercises > 0) parts.push(`${totalExercises} exercise ${totalExercises === 1 ? 'entry' : 'entries'}`);
+      if (totalMeals > 0) parts.push(`${totalMeals} meal ${totalMeals === 1 ? 'entry' : 'entries'}`);
       const newId = `${Date.now()}`;
-      setRecentLogs(prev => [{ id: newId, summary: parts.join(' + '), feedback: parsed.feedback, timestamp: Date.now() }, ...prev].slice(0, 10));
+      setRecentLogs(prev => [{ id: newId, summary: parts.join(' + ') || 'Synced', feedback: lastFeedback, timestamp: Date.now() }, ...prev].slice(0, 10));
       setExpandedLog(newId);
-      setSelectedTags([]); setSections([]); setFreeform('');
+      setQueue([]);
+      saveQueue([]);
     } catch (e: any) { setError(e.message || 'Failed to parse.'); }
     finally { setProcessing(false); }
   }
@@ -88,10 +138,6 @@ export default function LogTab() {
   const hasInput = sections.some(s => s.text.trim()) || freeform.trim();
   const pPct = Math.min((todayP / 175) * 100, 100);
   const pClr = todayP >= 165 ? 'hsl(14,68%,52%)' : todayP >= 130 ? 'hsl(38,70%,52%)' : 'hsl(30,8%,62%)';
-
-  function tagLabel(id: TagId): string {
-    return EXERCISE_TAGS.find(t => t.id === id)?.label || MEAL_TAGS.find(t => t.id === id)?.label || id;
-  }
 
   return (
     <div className="space-y-5 pb-4">
@@ -117,6 +163,20 @@ export default function LogTab() {
           </div>
         </div>
       )}
+
+      {/* Date selector */}
+      <div className="fade-up d1">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">Date</p>
+          {entryDate !== new Date().toISOString().split('T')[0] && (
+            <button onClick={() => setEntryDate(new Date().toISOString().split('T')[0])}
+              className="text-[10px] text-primary hover:underline font-medium">Today</button>
+          )}
+        </div>
+        <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)}
+          max={new Date().toISOString().split('T')[0]}
+          className="mt-1.5 w-full h-9 bg-card border border-border rounded-lg px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40" />
+      </div>
 
       {/* Exercise Tags */}
       <div className="space-y-2 fade-up d1">
@@ -170,16 +230,54 @@ export default function LogTab() {
         </div>
       )}
 
-      {/* Submit */}
+      {/* Add to Queue button */}
       <div className="flex gap-2 fade-up">
-        <Button onClick={submit} disabled={!hasInput || processing}
+        <Button onClick={addToQueue} disabled={!hasInput || processing}
           className="flex-1 accent-gradient text-white font-semibold h-11 rounded-xl border-0 shadow-sm">
-          {processing ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Processing…</span> : 'Log Entry'}
+          Add to Today's Log
         </Button>
         {hasInput && !processing && (
           <Button onClick={() => { setSelectedTags([]); setSections([]); setFreeform(''); }} variant="outline" className="text-muted-foreground text-xs px-4 rounded-xl h-11 border-border">Clear</Button>
         )}
       </div>
+
+      {/* Queue */}
+      {queue.length > 0 && (
+        <div className="space-y-3 fade-up">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">
+              Queued Entries <span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary text-white text-[9px]">{queue.length}</span>
+            </p>
+            <span className="text-[9px] text-muted-foreground/50">Not yet processed</span>
+          </div>
+          {queue.map(q => {
+            const today = new Date().toISOString().split('T')[0];
+            const dateLabel = (q.date || today) === today ? 'today' : q.date;
+            return (
+              <div key={q.id} className="card-inset rounded-lg px-3.5 py-2.5 flex items-center justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[11px] font-semibold truncate">{q.label}</p>
+                    <span className="text-[9px] text-muted-foreground/50 mono shrink-0">{dateLabel}</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground truncate mt-0.5">{q.text.slice(0, 80)}{q.text.length > 80 ? '…' : ''}</p>
+                </div>
+                <button onClick={() => removeFromQueue(q.id)} className="text-[10px] text-muted-foreground/40 hover:text-destructive transition-colors ml-2 shrink-0">✕</button>
+              </div>
+            );
+          })}
+
+          {/* Process All button */}
+          <Button onClick={processQueue} disabled={processing}
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold h-11 rounded-xl border-0 shadow-sm">
+            {processing
+              ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Processing all entries…</span>
+              : `Process All (${queue.length} ${queue.length === 1 ? 'entry' : 'entries'} — 1 AI call)`
+            }
+          </Button>
+          <p className="text-[9px] text-center text-muted-foreground/50">All queued entries are parsed in a single API call to save credits</p>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 flex items-center justify-between fade-up">

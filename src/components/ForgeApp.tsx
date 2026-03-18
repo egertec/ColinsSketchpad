@@ -5,6 +5,7 @@ import LogTab from '@/components/LogTab';
 import HistoryTab from '@/components/HistoryTab';
 import InstructionsTab from '@/components/InstructionsTab';
 import { useAutoGenerate } from '@/hooks/use-auto-generate';
+import { useAutoSync } from '@/hooks/use-auto-sync';
 
 type Tab = 'dashboard' | 'log' | 'history' | 'instructions';
 
@@ -18,11 +19,17 @@ const TABS: { id: Tab; label: string; iconDefault: string; iconActive: string }[
 export default function ForgeApp() {
   const [tab, setTab] = useState<Tab>('dashboard');
   const { status } = useAutoGenerate();
+  const { status: syncStatus, syncedCount } = useAutoSync();
 
   const isGenerating = status === 'generating-weekly';
   const isDone = status === 'done';
   const isError = status === 'error';
   const showBanner = isGenerating || isDone || isError;
+
+  const isSyncing = syncStatus === 'syncing';
+  const isSyncDone = syncStatus === 'done';
+  const isSyncError = syncStatus === 'error';
+  const showSyncBanner = isSyncing || isSyncDone || isSyncError;
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col max-w-lg mx-auto">
@@ -58,6 +65,23 @@ export default function ForgeApp() {
             {status === 'generating-weekly' && 'Generating your weekly plan…'}
             {isDone && 'Weekly plan updated — check Coach'}
             {isError && 'Generation failed — try manually'}
+          </span>
+        </div>
+      )}
+
+      {showSyncBanner && (
+        <div className={`mx-5 mb-2 px-4 py-2.5 rounded-lg flex items-center gap-2.5 text-[12px] fade-up ${
+          isSyncError ? 'bg-red-50 border border-red-100 text-red-600'
+          : isSyncDone ? 'bg-emerald-50 border border-emerald-100 text-emerald-700'
+          : 'card-inset text-muted-foreground'
+        }`}>
+          {isSyncing && <div className="w-3.5 h-3.5 border-[1.5px] border-primary border-t-transparent rounded-full animate-spin shrink-0" />}
+          {isSyncDone && <span className="text-emerald-600 shrink-0">✓</span>}
+          {isSyncError && <span className="shrink-0">✕</span>}
+          <span className="font-medium">
+            {isSyncing && 'Syncing queued entries…'}
+            {isSyncDone && `${syncedCount} ${syncedCount === 1 ? 'entry' : 'entries'} synced`}
+            {isSyncError && 'Auto-sync failed — use Process All on Log tab'}
           </span>
         </div>
       )}
