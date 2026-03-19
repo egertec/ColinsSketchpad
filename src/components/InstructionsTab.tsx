@@ -64,6 +64,7 @@ export default function InstructionsTab() {
   const [exercises, setExercises] = useState<ExerciseEntry[]>([]);
   const [nutrition, setNutrition] = useState<NutritionEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const editingRef = useRef(false);
   const [draft, setDraft] = useState<UserProfile>(DEFAULT_PROFILE);
@@ -125,42 +126,59 @@ export default function InstructionsTab() {
       </div>
 
       {/* Profile */}
-      <div className="card-elevated rounded-xl p-5 space-y-4 fade-up d1">
-        <div className="flex items-center justify-between">
-          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">My Profile</p>
+      <div className="card-elevated rounded-xl fade-up d1">
+        {/* Header row — always visible, clicking toggles collapse */}
+        <div
+          className="flex items-center justify-between px-5 py-3.5 cursor-pointer select-none"
+          onClick={() => { if (!editing) setProfileOpen(o => !o); }}
+        >
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">My Profile</p>
+            {!editing && (
+              <span className="text-[10px] text-muted-foreground/40">{profileOpen ? '▲' : '▼'}</span>
+            )}
+          </div>
           {!editing ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
               {profileSaved && <span className="text-[10px] text-primary font-semibold">Saved ✓</span>}
-              <button onClick={() => { setDraft(profile); setEditing(true); }} className="text-[11px] font-semibold text-primary hover:underline">Edit</button>
+              <button
+                onClick={() => { setDraft(profile); setEditing(true); setProfileOpen(true); }}
+                className="text-[11px] font-semibold text-primary hover:underline">Edit</button>
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex gap-2" onClick={e => e.stopPropagation()}>
               <button onClick={() => setEditing(false)} className="text-[11px] text-muted-foreground hover:text-foreground">Cancel</button>
               <button onClick={saveProfile} className="text-[11px] font-semibold text-primary hover:underline">Save</button>
             </div>
           )}
         </div>
-        {editing ? (
-          <div className="space-y-3">
-            {FIELDS.map(f => (
-              <div key={f.key} className="space-y-1">
-                <label className="text-[9px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">{f.label}</label>
-                {f.multi
-                  ? <Textarea value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="min-h-[50px] bg-background border-border text-sm resize-none rounded-lg" />
-                  : <Input value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="bg-background border-border text-sm h-9 rounded-lg" />
-                }
+
+        {/* Collapsible body */}
+        {(profileOpen || editing) && (
+          <div className="px-5 pb-5 space-y-3 border-t border-border/40">
+            {editing ? (
+              <div className="space-y-3 pt-3">
+                {FIELDS.map(f => (
+                  <div key={f.key} className="space-y-1">
+                    <label className="text-[9px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">{f.label}</label>
+                    {f.multi
+                      ? <Textarea value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="min-h-[50px] bg-background border-border text-sm resize-none rounded-lg" />
+                      : <Input value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="bg-background border-border text-sm h-9 rounded-lg" />
+                    }
+                  </div>
+                ))}
+                <p className="text-[10px] text-muted-foreground/60 italic">Changes will be used when generating new plans and briefings.</p>
               </div>
-            ))}
-            <p className="text-[10px] text-muted-foreground/60 italic">Changes will be used when generating new plans and briefings.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {FIELDS.filter(f => profile[f.key]).map(f => (
-              <div key={f.key} className="flex gap-3">
-                <span className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/60 font-semibold w-24 shrink-0 pt-0.5">{f.label}</span>
-                <span className="text-[12px] text-foreground/75 leading-relaxed">{profile[f.key]}</span>
+            ) : (
+              <div className="space-y-2 pt-3">
+                {FIELDS.filter(f => profile[f.key]).map(f => (
+                  <div key={f.key} className="flex gap-3">
+                    <span className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/60 font-semibold w-24 shrink-0 pt-0.5">{f.label}</span>
+                    <span className="text-[12px] text-foreground/75 leading-relaxed">{profile[f.key]}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>
