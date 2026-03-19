@@ -34,6 +34,11 @@ const PH: Partial<Record<TagId, string>> = {
 
 const QUEUE_KEY = 'forge-log-queue';
 
+function localDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function loadQueue(): QueuedEntry[] {
   try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; }
 }
@@ -50,13 +55,13 @@ export default function LogTab() {
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [todayP, setTodayP] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [entryDate, setEntryDate] = useState(() => localDate());
   const freeRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { loadCtx(); }, [recentLogs]);
   async function loadCtx() {
     const nu = await getNutritionLogs();
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     setTodayP(nu.filter((n: NutritionEntry) => n.date === today).reduce((s: number, m: NutritionEntry) => s + m.protein, 0));
     setProfile(await getUserProfile());
   }
@@ -91,7 +96,7 @@ export default function LogTab() {
     setQueue(updated);
     saveQueue(updated);
     setSelectedTags([]); setSections([]); setFreeform('');
-    setEntryDate(new Date().toISOString().split('T')[0]); // reset to today
+    setEntryDate(localDate()); // reset to today
   }
 
   function removeFromQueue(id: string) {
@@ -107,7 +112,7 @@ export default function LogTab() {
     try {
       // Group by explicit date so each date is processed as one prompt
       const byDate = queue.reduce<Record<string, QueuedEntry[]>>((acc, q) => {
-        const d = q.date || new Date().toISOString().split('T')[0];
+        const d = q.date || localDate();
         (acc[d] = acc[d] || []).push(q);
         return acc;
       }, {});
@@ -168,13 +173,13 @@ export default function LogTab() {
       <div className="fade-up d1">
         <div className="flex items-center justify-between">
           <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">Date</p>
-          {entryDate !== new Date().toISOString().split('T')[0] && (
-            <button onClick={() => setEntryDate(new Date().toISOString().split('T')[0])}
+          {entryDate !== localDate() && (
+            <button onClick={() => setEntryDate(localDate())}
               className="text-[10px] text-primary hover:underline font-medium">Today</button>
           )}
         </div>
         <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)}
-          max={new Date().toISOString().split('T')[0]}
+          max={localDate()}
           className="mt-1.5 w-full h-9 bg-card border border-border rounded-lg px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40" />
       </div>
 
@@ -251,7 +256,7 @@ export default function LogTab() {
             <span className="text-[9px] text-muted-foreground/50">Not yet processed</span>
           </div>
           {queue.map(q => {
-            const today = new Date().toISOString().split('T')[0];
+            const today = localDate();
             const dateLabel = (q.date || today) === today ? 'today' : q.date;
             return (
               <div key={q.id} className="card-inset rounded-lg px-3.5 py-2.5 flex items-center justify-between">
