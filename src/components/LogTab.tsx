@@ -56,6 +56,9 @@ export default function LogTab() {
   const [todayP, setTodayP] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [entryDate, setEntryDate] = useState(() => localDate());
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [editDate, setEditDate] = useState('');
   const freeRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { loadCtx(); }, [recentLogs]);
@@ -104,6 +107,21 @@ export default function LogTab() {
     setQueue(updated);
     saveQueue(updated);
   }
+
+  function startEditing(entry: QueuedEntry) {
+    setEditingId(entry.id);
+    setEditText(entry.text);
+    setEditDate(entry.date);
+  }
+
+  function saveEdit(id: string) {
+    const updated = queue.map(q => q.id === id ? { ...q, text: editText.trim(), date: editDate } : q);
+    setQueue(updated);
+    saveQueue(updated);
+    setEditingId(null);
+  }
+
+  function cancelEdit() { setEditingId(null); }
 
   // Process entire queue — group by date, one API call per date bucket
   async function processQueue() {
@@ -258,8 +276,40 @@ export default function LogTab() {
           {queue.map(q => {
             const today = localDate();
             const dateLabel = (q.date || today) === today ? 'today' : q.date;
+            const isEditing = editingId === q.id;
+            if (isEditing) {
+              return (
+                <div key={q.id} className="card-inset rounded-lg px-3.5 py-3 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground font-semibold">{q.label}</p>
+                    <button onClick={cancelEdit} className="text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
+                  </div>
+                  <Textarea
+                    value={editText}
+                    onChange={e => setEditText(e.target.value)}
+                    className="min-h-[72px] bg-background border-border text-sm resize-none rounded-lg"
+                    autoFocus
+                  />
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={e => setEditDate(e.target.value)}
+                    max={localDate()}
+                    className="w-full h-8 bg-background border border-border rounded-lg px-3 text-[12px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                  />
+                  <Button
+                    onClick={() => saveEdit(q.id)}
+                    disabled={!editText.trim()}
+                    size="sm"
+                    className="w-full accent-gradient text-white font-semibold h-8 rounded-lg border-0 text-[12px]">
+                    Save Changes
+                  </Button>
+                </div>
+              );
+            }
             return (
-              <div key={q.id} className="card-inset rounded-lg px-3.5 py-2.5 flex items-center justify-between">
+              <div key={q.id} className="card-inset rounded-lg px-3.5 py-2.5 flex items-center justify-between cursor-pointer hover:bg-muted/60 transition-colors"
+                onClick={() => startEditing(q)}>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-[11px] font-semibold truncate">{q.label}</p>
@@ -267,7 +317,11 @@ export default function LogTab() {
                   </div>
                   <p className="text-[10px] text-muted-foreground truncate mt-0.5">{q.text.slice(0, 80)}{q.text.length > 80 ? '…' : ''}</p>
                 </div>
-                <button onClick={() => removeFromQueue(q.id)} className="text-[10px] text-muted-foreground/40 hover:text-destructive transition-colors ml-2 shrink-0">✕</button>
+                <div className="flex items-center gap-2 ml-2 shrink-0">
+                  <span className="text-[9px] text-muted-foreground/40">edit</span>
+                  <button onClick={e => { e.stopPropagation(); removeFromQueue(q.id); }}
+                    className="text-[10px] text-muted-foreground/40 hover:text-destructive transition-colors">✕</button>
+                </div>
               </div>
             );
           })}
