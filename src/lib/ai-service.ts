@@ -1,26 +1,25 @@
-import { supabase, supabaseUrl, supabaseAnonKey } from './supabase';
-import type { ExerciseEntry, NutritionEntry, CoachInstruction, UserProfile, ActivityType } from './storage';
+import type { ExerciseEntry, NutritionEntry, CoachInstruction, UserProfile, ActivityType, StructuredExercise } from './storage';
+
+const API = 'https://api.anthropic.com/v1/messages';
+const MODEL = 'claude-sonnet-4-20250514';
 
 async function callClaude(system: string, userMsg: string, maxTokens = 2000): Promise<string> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token || '';
+  const apiKey = (import.meta as any).env?.VITE_ANTHROPIC_API_KEY || '';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
+  if (apiKey) headers['x-api-key'] = apiKey;
 
-  const res = await fetch(`${supabaseUrl}/functions/v1/ai-proxy`, {
+  const res = await fetch(API, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      'apikey': supabaseAnonKey,
-    },
-    body: JSON.stringify({ system, userMsg, maxTokens }),
+    headers,
+    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userMsg }] }),
   });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`AI proxy error ${res.status}: ${errText}`);
-  }
+  if (!res.ok) throw new Error(`API ${res.status}`);
   const data = await res.json();
-  return data.content;
+  return data.content.map((c: any) => c.text || '').filter(Boolean).join('\n');
 }
 
 function cleanJSON(raw: string): string {
@@ -49,6 +48,7 @@ export interface ParseResult {
     workoutType: string;
     duration: number;
     exercises?: string;
+    structuredExercises?: StructuredExercise[];
     sets?: string;
     reps?: string;
     weight?: string;
@@ -82,12 +82,18 @@ RULES:
 - Nutrition: estimate calories, protein, carbs, fat, fiber accurately using common food databases, restaurant menus, standard portions.
 - Exercise activityType must be one of: "Lifting", "Running", "Soccer", "Golf", "Hiking", "Biking", "Skiing", "Other"
 - Running: include miles, pace, classify runningType (Steady State, Interval Running, Tempo, Recovery Run, Other)
-- Lifting: extract exercises, sets, reps, weight
+- Lifting: extract exercises, sets, reps, weight. ALSO provide structuredExercises array with individual lift data.
 - For non-Lifting/Running activities (Soccer, Golf, Hiking, Biking, Skiing, Other): set workoutType to a descriptive name, estimate duration, include miles if applicable (hiking, biking), and add any relevant notes
 - Provide 2-3 sentence feedback on alignment with goals: ${profile.proteinTarget} daily protein, ${profile.fitnessGoals}
 
+IMPORTANT: For Lifting exercises, you MUST include the "structuredExercises" array with each individual exercise broken down:
+- "name": Canonical exercise name (e.g., "Bench Press", "Overhead Press", "Barbell Squat", "Lat Pulldown", "Cable Fly", "Pull-ups")
+- "weight": Weight in lbs (number, omit if bodyweight)
+- "sets": Array of reps per set (e.g., [8, 8, 8] for 3 sets of 8, or [8, 8, 5] if last set was lower)
+- "notes": Optional notes about the exercise
+
 Respond ONLY with valid JSON:
-{"exercises":[{"date":"YYYY-MM-DD","activityType":"Lifting|Running|Soccer|Golf|Hiking|Biking|Skiing|Other","workoutType":"name","duration":60,"exercises":"comma-separated or null","sets":"comma-separated or null","reps":"comma-separated or null","weight":"comma-separated lbs or null","miles":null,"averagePace":null,"runningType":null,"notes":""}],"meals":[{"date":"YYYY-MM-DD","mealType":"breakfast|lunch|dinner|snack","mealName":"description","calories":500,"protein":40,"carbs":50,"fat":15,"fiber":5}],"feedback":"assessment"}
+{"exercises":[{"date":"YYYY-MM-DD","activityType":"Lifting|Running|Soccer|Golf|Hiking|Biking|Skiing|Other","workoutType":"name","duration":60,"exercises":"comma-separated or null","structuredExercises":[{"name":"Bench Press","weight":185,"sets":[8,8,8]},{"name":"Pull-ups","sets":[10,10,10]}],"sets":"comma-separated or null","reps":"comma-separated or null","weight":"comma-separated lbs or null","miles":null,"averagePace":null,"runningType":null,"notes":""}],"meals":[{"date":"YYYY-MM-DD","mealType":"breakfast|lunch|dinner|snack","mealName":"description","calories":500,"protein":40,"carbs":50,"fat":15,"fiber":5}],"feedback":"assessment"}
 
 Empty arrays are fine if only exercise or only nutrition provided. Parse EACH activity as a separate exercise entry.`;
 
@@ -186,6 +192,7 @@ export async function generateDailyBriefing(
     : 'No nutrition logged yesterday.';
 
   const weeklyContext = currentWeeklyPlan ? `CURRENT WEEKLY PLAN:\n${currentWeeklyPlan.body.slice(0, 2000)}` : 'No weekly plan generated yet.';
+
   const recent3 = exerciseLogs.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map(e => `${e.date}: ${e.activityType} - ${e.workoutType}`).join('\n');
 
   const sys = `You are Colin's daily fitness accountability coach. Generate today's briefing.
@@ -194,10 +201,10 @@ ${profileToPrompt(profile)}
 
 RESPONSE FORMAT (plain text, scannable with emoji headers):
 
-🔥 YESTERDAY'S RECAP — Brief summary of yesterday's workout and nutrition with feedback.
-💪 TODAY'S WORKOUT — ${dayName} — The specific workout for today from the weekly plan. Include exercises, sets, reps, rest.
-🎯 NUTRITION FOCUS — Protein target reminder and one meal suggestion.
-⚡ COACH'S NOTE — One motivating insight based on the data.
+\u{1F525} YESTERDAY'S RECAP — Brief summary of yesterday's workout and nutrition with feedback.
+\u{1F4AA} TODAY'S WORKOUT — ${dayName} — The specific workout for today from the weekly plan. Include exercises, sets, reps, rest.
+\u{1F3AF} NUTRITION FOCUS — Protein target reminder and one meal suggestion.
+\u26A1 COACH'S NOTE — One motivating insight based on the data.
 
 Keep it SHORT, punchy, mobile-friendly.`;
 

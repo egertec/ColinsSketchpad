@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { parseNaturalLanguageLog, type ParseResult } from '@/lib/ai-service';
-import { addExerciseLog, addNutritionLog, getNutritionLogs, getUserProfile, ACTIVITY_META, type NutritionEntry, type UserProfile, type ActivityType } from '@/lib/storage';
+import {
+  addExerciseLog, addNutritionLog, getNutritionLogs, getUserProfile,
+  ACTIVITY_META, type NutritionEntry, type UserProfile, type ActivityType,
+  getDraftLogs, addDraftLog, removeDraftLogs, getSyncSettings, saveSyncSettings,
+  acquireSyncLock, releaseSyncLock, isSyncLocked,
+  type DraftLogEntry,
+} from '@/lib/storage';
 
 type TagId = ActivityType | 'breakfast' | 'lunch' | 'dinner' | 'snack';
-
-const LOG_HEADER_IMG = 'https://images.unsplash.com/photo-1540497077202-7c8a3999166f?w=800&q=80&auto=format&fit=crop';
 
 const EXERCISE_TAGS: { id: ActivityType; label: string }[] = [
   { id: 'Lifting', label: '🏋️ Lifting' }, { id: 'Running', label: '🏃 Run' }, { id: 'Soccer', label: '⚽ Soccer' },
@@ -19,7 +22,7 @@ const MEAL_TAGS: { id: 'breakfast' | 'lunch' | 'dinner' | 'snack'; label: string
   { id: 'dinner', label: '🍖 Dinner' }, { id: 'snack', label: '🍎 Snack' },
 ];
 
-interface QueuedEntry { id: string; label: string; text: string; date: string; timestamp: number; }
+interface SectionInput { id: TagId; text: string; }
 interface RecentLog { id: string; summary: string; feedback: string; timestamp: number; }
 
 const PH: Partial<Record<TagId, string>> = {
@@ -32,41 +35,29 @@ const PH: Partial<Record<TagId, string>> = {
   dinner: 'Pesto pasta with chicken, tomatoes, parmesan', snack: 'Greek yogurt with berries, protein shake',
 };
 
-const QUEUE_KEY = 'forge-log-queue';
-
-function localDate(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function loadQueue(): QueuedEntry[] {
-  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; }
-}
-function saveQueue(q: QueuedEntry[]) { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); }
-
 export default function LogTab() {
   const [selectedTags, setSelectedTags] = useState<TagId[]>([]);
-  const [sections, setSections] = useState<{ id: TagId; text: string }[]>([]);
+  const [sections, setSections] = useState<SectionInput[]>([]);
   const [freeform, setFreeform] = useState('');
-  const [queue, setQueue] = useState<QueuedEntry[]>(loadQueue);
   const [processing, setProcessing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recentLogs, setRecentLogs] = useState<RecentLog[]>([]);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [todayP, setTodayP] = useState(0);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [entryDate, setEntryDate] = useState(() => localDate());
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState('');
-  const [editDate, setEditDate] = useState('');
+  const [drafts, setDrafts] = useState<DraftLogEntry[]>([]);
+  const [syncSuccess, setSyncSuccess] = useState(false);
+  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
   const freeRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { loadCtx(); }, [recentLogs]);
   async function loadCtx() {
     const nu = await getNutritionLogs();
-    const today = localDate();
+    const today = new Date().toISOString().split('T')[0];
     setTodayP(nu.filter((n: NutritionEntry) => n.date === today).reduce((s: number, m: NutritionEntry) => s + m.protein, 0));
     setProfile(await getUserProfile());
+    setDrafts(await getDraftLogs());
   }
 
   function toggleTag(id: TagId) {
@@ -77,11 +68,6 @@ export default function LogTab() {
     });
   }
   function updateSection(id: TagId, text: string) { setSections(prev => prev.map(s => s.id === id ? { ...s, text } : s)); }
-
-  function tagLabel(id: TagId): string {
-    return EXERCISE_TAGS.find(t => t.id === id)?.label || MEAL_TAGS.find(t => t.id === id)?.label || id;
-  }
-
   function buildInput(): string {
     const parts: string[] = [];
     for (const s of sections) { if (!s.text.trim()) continue; const isEx = EXERCISE_TAGS.some(t => t.id === s.id); parts.push(isEx ? `Exercise (${s.id}): ${s.text.trim()}` : `${s.id.charAt(0).toUpperCase() + s.id.slice(1)}: ${s.text.trim()}`); }
@@ -89,62 +75,52 @@ export default function LogTab() {
     return parts.join('\n\n');
   }
 
-  // Add to queue (no API call)
-  function addToQueue() {
+  async function submit() {
     const input = buildInput(); if (!input) return;
-    const labels = sections.filter(s => s.text.trim()).map(s => tagLabel(s.id));
-    if (freeform.trim() && labels.length === 0) labels.push('Freeform');
-    const entry: QueuedEntry = { id: `${Date.now()}`, label: labels.join(', '), text: input, date: entryDate, timestamp: Date.now() };
-    const updated = [...queue, entry];
-    setQueue(updated);
-    saveQueue(updated);
-    setSelectedTags([]); setSections([]); setFreeform('');
-    setEntryDate(localDate()); // reset to today
-  }
-
-  function removeFromQueue(id: string) {
-    const updated = queue.filter(q => q.id !== id);
-    setQueue(updated);
-    saveQueue(updated);
-  }
-
-  function startEditing(entry: QueuedEntry) {
-    setEditingId(entry.id);
-    setEditText(entry.text);
-    setEditDate(entry.date);
-  }
-
-  function saveEdit(id: string) {
-    const updated = queue.map(q => q.id === id ? { ...q, text: editText.trim(), date: editDate } : q);
-    setQueue(updated);
-    saveQueue(updated);
-    setEditingId(null);
-  }
-
-  function cancelEdit() { setEditingId(null); }
-
-  // Process entire queue — group by date, one API call per date bucket
-  async function processQueue() {
-    if (queue.length === 0 || !profile) return;
     setProcessing(true); setError(null);
     try {
-      // Group by explicit date so each date is processed as one prompt
-      const byDate = queue.reduce<Record<string, QueuedEntry[]>>((acc, q) => {
-        const d = q.date || localDate();
-        (acc[d] = acc[d] || []).push(q);
+      const draft = await addDraftLog(input, [...selectedTags], entryDate);
+      setDrafts(prev => [draft, ...prev]);
+      setSelectedTags([]); setSections([]); setFreeform('');
+      setEntryDate(new Date().toISOString().split('T')[0]);
+    } catch (e: any) { setError(e.message || 'Failed to save draft.'); }
+    finally { setProcessing(false); }
+  }
+
+  async function syncNow() {
+    if (drafts.length === 0 || !profile) return;
+    // Check sync lock
+    if (isSyncLocked() || !acquireSyncLock()) {
+      setError('Another sync is in progress. Please wait.');
+      return;
+    }
+    setSyncing(true); setError(null);
+    try {
+      const byDate = drafts.reduce<Record<string, DraftLogEntry[]>>((acc, d) => {
+        (acc[d.date] = acc[d.date] || []).push(d);
         return acc;
       }, {});
 
-      let totalExercises = 0, totalMeals = 0, lastFeedback = '';
+      let totalExercises = 0, totalMeals = 0;
+      let lastFeedback = '';
       for (const [date, group] of Object.entries(byDate)) {
-        const combined = group.map((q, i) => `--- Entry ${i + 1} (${q.label}) ---\n${q.text}`).join('\n\n');
-        const parsed = await parseNaturalLanguageLog(combined, profile);
+        const combinedInput = group.map(d => d.rawText).join('\n\n---\n\n');
+        const parsed = await parseNaturalLanguageLog(combinedInput, profile);
         for (const e of parsed.exercises) await addExerciseLog({ ...e, date });
         for (const m of parsed.meals) await addNutritionLog({ ...m, date });
         totalExercises += parsed.exercises.length;
         totalMeals += parsed.meals.length;
         lastFeedback = parsed.feedback;
+
+        // Incrementally remove processed drafts
+        await removeDraftLogs(group.map(d => d.id));
       }
+
+      const settings = await getSyncSettings();
+      settings.lastSyncDate = new Date().toISOString().split('T')[0];
+      await saveSyncSettings(settings);
+
+      releaseSyncLock();
 
       const parts: string[] = [];
       if (totalExercises > 0) parts.push(`${totalExercises} exercise ${totalExercises === 1 ? 'entry' : 'entries'}`);
@@ -152,36 +128,40 @@ export default function LogTab() {
       const newId = `${Date.now()}`;
       setRecentLogs(prev => [{ id: newId, summary: parts.join(' + ') || 'Synced', feedback: lastFeedback, timestamp: Date.now() }, ...prev].slice(0, 10));
       setExpandedLog(newId);
-      setQueue([]);
-      saveQueue([]);
-    } catch (e: any) { setError(e.message || 'Failed to parse.'); }
-    finally { setProcessing(false); }
+      setDrafts([]);
+      setSyncSuccess(true);
+      setTimeout(() => setSyncSuccess(false), 3000);
+    } catch (e: any) {
+      releaseSyncLock();
+      setError(e.message || 'Sync failed.');
+    }
+    finally { setSyncing(false); }
   }
 
   const hasInput = sections.some(s => s.text.trim()) || freeform.trim();
   const pPct = Math.min((todayP / 175) * 100, 100);
-  const pClr = todayP >= 165 ? 'hsl(14,68%,52%)' : todayP >= 130 ? 'hsl(38,70%,52%)' : 'hsl(30,8%,62%)';
+  const pClr = todayP >= 165 ? '#34d399' : todayP >= 130 ? '#fbbf24' : 'rgba(255,255,255,0.3)';
+
+  function tagLabel(id: TagId): string {
+    return EXERCISE_TAGS.find(t => t.id === id)?.label || MEAL_TAGS.find(t => t.id === id)?.label || id;
+  }
 
   return (
     <div className="space-y-5 pb-4">
-      {/* Header with image */}
-      <div className="hero-card fade-up" style={{ height: '120px' }}>
-        <img src={LOG_HEADER_IMG} alt="" loading="eager" />
-        <div className="hero-overlay" />
-        <div className="absolute inset-0 flex flex-col justify-end p-5">
-          <p className="text-white/60 text-[11px] font-medium uppercase tracking-[0.15em]">Track your progress</p>
-          <h2 className="font-display text-2xl font-bold text-white mt-0.5">Log</h2>
-        </div>
+      {/* Header */}
+      <div className="fade-up pt-2">
+        <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-widest">Track your progress</p>
+        <h2 className="text-3xl font-bold tracking-tight mt-1">Log</h2>
       </div>
 
       {/* Protein bar */}
       {todayP > 0 && (
         <div className="fade-up d1">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground font-semibold">Today's Protein</span>
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Today's Protein</span>
             <span className="text-[11px] mono font-semibold" style={{ color: pClr }}>{todayP}g / {profile?.proteinTarget || '165-180g'}</span>
           </div>
-          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
             <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pPct}%`, backgroundColor: pClr }} />
           </div>
         </div>
@@ -190,24 +170,26 @@ export default function LogTab() {
       {/* Date selector */}
       <div className="fade-up d1">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">Date</p>
-          {entryDate !== localDate() && (
-            <button onClick={() => setEntryDate(localDate())}
+          <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Date</p>
+          {entryDate !== new Date().toISOString().split('T')[0] && (
+            <button onClick={() => setEntryDate(new Date().toISOString().split('T')[0])}
               className="text-[10px] text-primary hover:underline font-medium">Today</button>
           )}
         </div>
         <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)}
-          max={localDate()}
-          className="mt-1.5 w-full h-9 bg-card border border-border rounded-lg px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40" />
+          max={new Date().toISOString().split('T')[0]}
+          className="mt-1.5 w-full h-9 rounded-lg px-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40" />
       </div>
 
       {/* Exercise Tags */}
       <div className="space-y-2 fade-up d1">
-        <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">Exercise</p>
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Exercise</p>
         <div className="flex flex-wrap gap-2">
           {EXERCISE_TAGS.map(t => (
             <button key={t.id} onClick={() => toggleTag(t.id)}
-              className={`chip px-3 py-1.5 text-[12px] rounded-full border ${selectedTags.includes(t.id) ? 'chip-active' : 'border-border bg-card text-foreground hover:border-primary/40'}`}>
+              className={`chip px-3 py-1.5 text-[12px] rounded-full border ${selectedTags.includes(t.id)
+                ? 'chip-active'
+                : 'border-border bg-card text-foreground hover:border-primary/40'}`}>
               {t.label}
             </button>
           ))}
@@ -216,11 +198,13 @@ export default function LogTab() {
 
       {/* Meal Tags */}
       <div className="space-y-2 fade-up d2">
-        <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">Nutrition</p>
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Nutrition</p>
         <div className="flex flex-wrap gap-2">
           {MEAL_TAGS.map(t => (
             <button key={t.id} onClick={() => toggleTag(t.id)}
-              className={`chip px-3 py-1.5 text-[12px] rounded-full border ${selectedTags.includes(t.id) ? 'chip-active' : 'border-border bg-card text-foreground hover:border-primary/40'}`}>
+              className={`chip px-3 py-1.5 text-[12px] rounded-full border ${selectedTags.includes(t.id)
+                ? 'chip-active'
+                : 'border-border bg-card text-foreground hover:border-primary/40'}`}>
               {t.label}
             </button>
           ))}
@@ -233,11 +217,11 @@ export default function LogTab() {
           {sections.map(s => (
             <div key={s.id} className="card-elevated rounded-xl p-4 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.1em]">{tagLabel(s.id)}</span>
+                <span className="text-[11px] font-semibold uppercase tracking-widest">{tagLabel(s.id)}</span>
                 <button onClick={() => toggleTag(s.id)} className="text-[10px] text-muted-foreground hover:text-destructive transition-colors">Remove</button>
               </div>
               <Textarea value={s.text} onChange={e => updateSection(s.id, e.target.value)} placeholder={PH[s.id] || 'Describe…'}
-                className="min-h-[56px] bg-background border-border text-sm resize-none rounded-lg" disabled={processing} />
+                className="min-h-[56px] text-sm resize-none rounded-lg" disabled={processing} />
             </div>
           ))}
         </div>
@@ -246,102 +230,70 @@ export default function LogTab() {
       {/* Freeform */}
       {sections.length === 0 && (
         <div className="card-elevated rounded-xl p-4 space-y-2 fade-up d3">
-          <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground font-semibold">Or type freely</p>
+          <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Or type freely</p>
           <Textarea ref={freeRef} value={freeform} onChange={e => setFreeform(e.target.value)} disabled={processing}
             placeholder={'Describe your workout, meals, or both…\n\n"Did upper body — bench 185×5×4, rows 135×8×3. For lunch I had a Chipotle bowl with chicken and guac."'}
-            className="min-h-[90px] bg-background border-border text-sm resize-none rounded-lg" />
+            className="min-h-[90px] text-sm resize-none rounded-lg" />
         </div>
       )}
 
-      {/* Add to Queue button */}
+      {/* Submit */}
       <div className="flex gap-2 fade-up">
-        <Button onClick={addToQueue} disabled={!hasInput || processing}
+        <Button onClick={submit} disabled={!hasInput || processing}
           className="flex-1 accent-gradient text-white font-semibold h-11 rounded-xl border-0 shadow-sm">
-          Add to Today's Log
+          {processing ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Saving…</span> : 'Queue Entry'}
         </Button>
         {hasInput && !processing && (
           <Button onClick={() => { setSelectedTags([]); setSections([]); setFreeform(''); }} variant="outline" className="text-muted-foreground text-xs px-4 rounded-xl h-11 border-border">Clear</Button>
         )}
       </div>
 
-      {/* Queue */}
-      {queue.length > 0 && (
-        <div className="space-y-3 fade-up">
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-center justify-between fade-up">
+          <p className="text-sm text-red-400">{error}</p>
+          <button onClick={() => setError(null)} className="text-red-400/50 hover:text-red-400 text-xs ml-2">✕</button>
+        </div>
+      )}
+
+      {/* Pending Drafts Queue */}
+      {drafts.length > 0 && (
+        <div className="space-y-2 fade-up">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">
-              Queued Entries <span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary text-white text-[9px]">{queue.length}</span>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+              Pending ({drafts.length} {drafts.length === 1 ? 'entry' : 'entries'})
             </p>
-            <span className="text-[9px] text-muted-foreground/50">Not yet processed</span>
+            <span className="text-[9px] text-muted-foreground/50 italic">syncs automatically at end of day</span>
           </div>
-          {queue.map(q => {
-            const today = localDate();
-            const dateLabel = (q.date || today) === today ? 'today' : q.date;
-            const isEditing = editingId === q.id;
-            if (isEditing) {
-              return (
-                <div key={q.id} className="card-inset rounded-lg px-3.5 py-3 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground font-semibold">{q.label}</p>
-                    <button onClick={cancelEdit} className="text-[10px] text-muted-foreground hover:text-foreground">Cancel</button>
-                  </div>
-                  <Textarea
-                    value={editText}
-                    onChange={e => setEditText(e.target.value)}
-                    className="min-h-[72px] bg-background border-border text-sm resize-none rounded-lg"
-                    autoFocus
-                  />
-                  <input
-                    type="date"
-                    value={editDate}
-                    onChange={e => setEditDate(e.target.value)}
-                    max={localDate()}
-                    className="w-full h-8 bg-background border border-border rounded-lg px-3 text-[12px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  />
-                  <Button
-                    onClick={() => saveEdit(q.id)}
-                    disabled={!editText.trim()}
-                    size="sm"
-                    className="w-full accent-gradient text-white font-semibold h-8 rounded-lg border-0 text-[12px]">
-                    Save Changes
-                  </Button>
-                </div>
-              );
-            }
+          {drafts.map(d => {
+            const preview = d.rawText.length > 120 ? d.rawText.slice(0, 120) + '…' : d.rawText;
+            const age = Date.now() - new Date(d.createdAt).getTime();
+            const isNew = age < 3000;
             return (
-              <div key={q.id} className="card-inset rounded-lg px-3.5 py-2.5 flex items-center justify-between cursor-pointer hover:bg-muted/60 transition-colors"
-                onClick={() => startEditing(q)}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-[11px] font-semibold truncate">{q.label}</p>
-                    <span className="text-[9px] text-muted-foreground/50 mono shrink-0">{dateLabel}</span>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground truncate mt-0.5">{q.text.slice(0, 80)}{q.text.length > 80 ? '…' : ''}</p>
-                </div>
-                <div className="flex items-center gap-2 ml-2 shrink-0">
-                  <span className="text-[9px] text-muted-foreground/40">edit</span>
-                  <button onClick={e => { e.stopPropagation(); removeFromQueue(q.id); }}
-                    className="text-[10px] text-muted-foreground/40 hover:text-destructive transition-colors">✕</button>
+              <div key={d.id} className={`rounded-xl border transition-all ${isNew ? 'border-amber-500/30 bg-amber-500/5' : 'border-border/60 bg-card/60'}`}>
+                <div className="px-4 py-2.5 flex items-center gap-2">
+                  <span className="text-amber-500 text-xs font-bold">⏳</span>
+                  <span className="text-[12px] text-foreground/70 flex-1 truncate">{preview}</span>
+                  <span className="text-[9px] text-muted-foreground/50 mono shrink-0 ml-1">
+                    {d.date === new Date().toISOString().split('T')[0] ? 'today' : d.date}
+                  </span>
                 </div>
               </div>
             );
           })}
-
-          {/* Process All button */}
-          <Button onClick={processQueue} disabled={processing}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold h-11 rounded-xl border-0 shadow-sm">
-            {processing
-              ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />Processing all entries…</span>
-              : `Process All (${queue.length} ${queue.length === 1 ? 'entry' : 'entries'} — 1 AI call)`
-            }
+          <Button onClick={syncNow} disabled={syncing} variant="outline"
+            className="w-full h-10 rounded-xl border-primary/30 text-primary font-semibold text-[12px] hover:bg-primary/5">
+            {syncing
+              ? <span className="flex items-center gap-2"><span className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />Syncing…</span>
+              : `Sync Now (${drafts.length})`}
           </Button>
-          <p className="text-[9px] text-center text-muted-foreground/50">All queued entries are parsed in a single API call to save credits</p>
         </div>
       )}
 
-      {error && (
-        <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 flex items-center justify-between fade-up">
-          <p className="text-sm text-red-600">{error}</p>
-          <button onClick={() => setError(null)} className="text-red-300 hover:text-red-500 text-xs ml-2">✕</button>
+      {/* Sync success banner */}
+      {syncSuccess && (
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-2.5 flex items-center gap-2 fade-up">
+          <span className="text-emerald-400 text-xs font-bold">✓</span>
+          <p className="text-[12px] text-emerald-400 font-medium">All entries synced successfully</p>
         </div>
       )}
 
@@ -349,7 +301,7 @@ export default function LogTab() {
       {recentLogs.length > 0 && (
         <div className="space-y-2 fade-up">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">Recent Entries</p>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Recent Entries</p>
             <button onClick={() => setRecentLogs([])} className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors">Clear</button>
           </div>
           {recentLogs.map(log => {
@@ -358,7 +310,7 @@ export default function LogTab() {
             const isNew = age < 3000;
             return (
               <div key={log.id} onClick={() => setExpandedLog(isExp ? null : log.id)}
-                className={`rounded-xl border transition-all cursor-pointer ${isNew ? 'border-primary/30 bg-orange-50/50' : 'border-border bg-card'}`}>
+                className={`rounded-xl border transition-all cursor-pointer ${isNew ? 'border-primary/30 bg-primary/5' : 'border-border bg-card'}`}>
                 <div className="px-4 py-2.5 flex items-center gap-2">
                   <span className="text-primary text-xs font-bold">✓</span>
                   <span className="text-[12px] text-foreground/80 flex-1 truncate">{log.summary}</span>
@@ -366,7 +318,7 @@ export default function LogTab() {
                 </div>
                 {isExp && log.feedback && (
                   <div className="px-4 pb-3 border-t border-border/50">
-                    <p className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground font-semibold mt-2 mb-1">Coach</p>
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mt-2 mb-1">Coach</p>
                     <p className="text-[12px] text-muted-foreground leading-relaxed">{log.feedback}</p>
                   </div>
                 )}
