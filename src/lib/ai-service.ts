@@ -1,25 +1,26 @@
+import { supabase, supabaseUrl, supabaseAnonKey } from './supabase';
 import type { ExerciseEntry, NutritionEntry, CoachInstruction, UserProfile, ActivityType, StructuredExercise } from './storage';
 
-const API = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-sonnet-4-20250514';
-
 async function callClaude(system: string, userMsg: string, maxTokens = 2000): Promise<string> {
-  const apiKey = (import.meta as any).env?.VITE_ANTHROPIC_API_KEY || '';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'anthropic-version': '2023-06-01',
-    'anthropic-dangerous-direct-browser-access': 'true',
-  };
-  if (apiKey) headers['x-api-key'] = apiKey;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || '';
 
-  const res = await fetch(API, {
+  const res = await fetch(`${supabaseUrl}/functions/v1/ai-proxy`, {
     method: 'POST',
-    headers,
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userMsg }] }),
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'apikey': supabaseAnonKey,
+    },
+    body: JSON.stringify({ system, userMsg, maxTokens }),
   });
-  if (!res.ok) throw new Error(`API ${res.status}`);
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`AI proxy error ${res.status}: ${errText}`);
+  }
   const data = await res.json();
-  return data.content.map((c: any) => c.text || '').filter(Boolean).join('\n');
+  return data.content;
 }
 
 function cleanJSON(raw: string): string {
@@ -192,7 +193,6 @@ export async function generateDailyBriefing(
     : 'No nutrition logged yesterday.';
 
   const weeklyContext = currentWeeklyPlan ? `CURRENT WEEKLY PLAN:\n${currentWeeklyPlan.body.slice(0, 2000)}` : 'No weekly plan generated yet.';
-
   const recent3 = exerciseLogs.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map(e => `${e.date}: ${e.activityType} - ${e.workoutType}`).join('\n');
 
   const sys = `You are Colin's daily fitness accountability coach. Generate today's briefing.
@@ -201,10 +201,10 @@ ${profileToPrompt(profile)}
 
 RESPONSE FORMAT (plain text, scannable with emoji headers):
 
-\u{1F525} YESTERDAY'S RECAP — Brief summary of yesterday's workout and nutrition with feedback.
-\u{1F4AA} TODAY'S WORKOUT — ${dayName} — The specific workout for today from the weekly plan. Include exercises, sets, reps, rest.
-\u{1F3AF} NUTRITION FOCUS — Protein target reminder and one meal suggestion.
-\u26A1 COACH'S NOTE — One motivating insight based on the data.
+🔥 YESTERDAY'S RECAP — Brief summary of yesterday's workout and nutrition with feedback.
+💪 TODAY'S WORKOUT — ${dayName} — The specific workout for today from the weekly plan. Include exercises, sets, reps, rest.
+🎯 NUTRITION FOCUS — Protein target reminder and one meal suggestion.
+⚡ COACH'S NOTE — One motivating insight based on the data.
 
 Keep it SHORT, punchy, mobile-friendly.`;
 
