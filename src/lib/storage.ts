@@ -139,6 +139,7 @@ export function removeDraftLogs(ids: string[]) {
 // ── Sync Settings (localStorage) ──────────────────────
 export interface SyncSettings {
   autoSyncHour: number;
+  lastSyncDate?: string;
 }
 
 const SYNC_SETTINGS_KEY = 'forge_sync_settings';
