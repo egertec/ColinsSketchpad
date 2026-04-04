@@ -17,9 +17,9 @@ export const ACTIVITY_META: Record<ActivityType, { icon: string; color: string }
 
 // ── Structured Exercise Data ───────────────────────────
 export interface StructuredExercise {
-  name: string;       // e.g., "Bench Press"
-  weight?: number;    // in lbs
-  sets: number[];     // reps per set, e.g., [8, 8, 5]
+  name: string;
+  weight?: number;
+  sets: number[];
   notes?: string;
 }
 
@@ -107,7 +107,8 @@ export interface DraftLogEntry {
   id: string;
   date: string;
   type: 'exercise' | 'nutrition';
-  raw: string;
+  rawText: string;
+  tags: string[];
   parsedExercises?: ExerciseEntry[];
   parsedMeals?: NutritionEntry[];
   feedback?: string;
@@ -125,10 +126,19 @@ function saveDrafts(drafts: DraftLogEntry[]) {
 
 export function getDraftLogs(): DraftLogEntry[] { return loadDrafts(); }
 
-export function addDraftLog(entry: DraftLogEntry) {
+export function addDraftLog(rawText: string, tags: string[], date: string): DraftLogEntry {
+  const entry: DraftLogEntry = {
+    id: crypto.randomUUID(),
+    date,
+    type: tags.some(t => ['Lifting','Running','Soccer','Golf','Hiking','Biking','Skiing','Other'].includes(t)) ? 'exercise' : 'nutrition',
+    rawText,
+    tags,
+    createdAt: new Date().toISOString(),
+  };
   const drafts = loadDrafts();
   drafts.push(entry);
   saveDrafts(drafts);
+  return entry;
 }
 
 export function removeDraftLogs(ids: string[]) {
@@ -138,12 +148,12 @@ export function removeDraftLogs(ids: string[]) {
 
 // ── Sync Settings (localStorage) ──────────────────────
 export interface SyncSettings {
-  autoSyncHour: number;
+  cutoffHour: number;
   lastSyncDate?: string;
 }
 
 const SYNC_SETTINGS_KEY = 'forge_sync_settings';
-const DEFAULT_SYNC_SETTINGS: SyncSettings = { autoSyncHour: 21 };
+const DEFAULT_SYNC_SETTINGS: SyncSettings = { cutoffHour: 21 };
 
 export function getSyncSettings(): SyncSettings {
   try { return { ...DEFAULT_SYNC_SETTINGS, ...JSON.parse(localStorage.getItem(SYNC_SETTINGS_KEY) || '{}') }; }
@@ -161,7 +171,6 @@ export function releaseSyncLock() { _syncLock = false; }
 export function isSyncLocked(): boolean { return _syncLock; }
 
 // ── Structured Exercises Cache (localStorage) ──────────
-// Stored separately to avoid Supabase schema changes
 const SE_CACHE_KEY = 'forge_structured_exercises';
 
 function loadSECache(): Record<string, StructuredExercise[]> {
@@ -171,11 +180,7 @@ function saveSECache(cache: Record<string, StructuredExercise[]>) {
   localStorage.setItem(SE_CACHE_KEY, JSON.stringify(cache));
 }
 
-function getStructuredExercisesForId(id: string): StructuredExercise[] | undefined {
-  return loadSECache()[id];
-}
-
-function setStructuredExercisesForId(id: string, se: StructuredExercise[]) {
+export function setStructuredExercisesForLog(id: string, se: StructuredExercise[]) {
   const cache = loadSECache();
   cache[id] = se;
   saveSECache(cache);
@@ -201,8 +206,8 @@ function mapExerciseRow(r: any): ExerciseEntry {
     miles: r.miles ? Number(r.miles) : undefined, averagePace: r.average_pace || undefined,
     runningType: r.running_type || undefined, notes: r.notes || undefined, createdAt: r.created_at,
   };
-  const cached = getStructuredExercisesForId(r.id);
-  if (cached) entry.structuredExercises = cached;
+  const cache = loadSECache();
+  if (cache[r.id]) entry.structuredExercises = cache[r.id];
   return entry;
 }
 
@@ -274,9 +279,8 @@ export async function addExerciseLog(e: Omit<ExerciseEntry, 'id' | 'createdAt'>)
   }).select().single();
   if (error || !data) throw new Error(error?.message || 'Failed to add exercise log');
   const entry = mapExerciseRow(data);
-  // Cache structured exercises if provided
   if (e.structuredExercises?.length) {
-    setStructuredExercisesForId(entry.id, e.structuredExercises);
+    setStructuredExercisesForLog(entry.id, e.structuredExercises);
     entry.structuredExercises = e.structuredExercises;
   }
   return entry;
@@ -284,7 +288,6 @@ export async function addExerciseLog(e: Omit<ExerciseEntry, 'id' | 'createdAt'>)
 
 export async function deleteExerciseLog(id: string) {
   await supabase.from('exercise_logs').delete().eq('id', id);
-  // Clean up local cache
   const cache = loadSECache();
   delete cache[id];
   saveSECache(cache);
@@ -340,8 +343,7 @@ export async function deleteCoachInstruction(id: string) {
 export async function deduplicateLogs(): Promise<void> {
   const [exercises, nutrition] = await Promise.all([getExerciseLogs(), getNutritionLogs()]);
 
-  // Deduplicate nutrition by content hash
-  const nuSeen = new Map<string, string>(); // hash → id (earliest)
+  const nuSeen = new Map<string, string>();
   const nuToDelete: string[] = [];
   for (const n of [...nutrition].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
     const hash = `${n.date}|${n.mealType}|${n.mealName}|${n.calories}|${n.protein}`;
@@ -349,7 +351,6 @@ export async function deduplicateLogs(): Promise<void> {
     else { nuSeen.set(hash, n.id); }
   }
 
-  // Deduplicate exercise by content hash
   const exSeen = new Map<string, string>();
   const exToDelete: string[] = [];
   for (const e of [...exercises].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
@@ -364,32 +365,27 @@ export async function deduplicateLogs(): Promise<void> {
   ]);
 }
 
-// ── Trailing 7-Day Stats ───────────────────────────────
+// ── Trailing 7-Day Stats (synchronous, takes pre-fetched data) ─
 export interface TrailingStats {
-  // Workouts
-  workoutDays: number;       // days with at least one workout
   totalWorkouts: number;
   workoutMinutes: number;
+  totalMinutes: number;
   workoutTypes: Partial<Record<ActivityType, number>>;
-  // Nutrition
   avgDailyCalories: number;
   avgDailyProtein: number;
-  nutritionDays: number;     // days with at least one meal
-  // Streak
-  currentStreak: number;
+  nutritionDays: number;
+  streak: number;
+  proteinByDay: { date: string; value: number }[];
+  workoutsByDay: { date: string; types: ActivityType[] }[];
 }
 
-export async function getTrailing7DayStats(): Promise<TrailingStats> {
-  const [exercises, nutrition] = await Promise.all([getExerciseLogs(), getNutritionLogs()]);
-
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 7);
-  const cutoffStr = cutoff.toISOString().split('T')[0];
+export function getTrailing7DayStats(exercises: ExerciseEntry[], nutrition: NutritionEntry[]): TrailingStats {
+  const dates = getLast7Dates();
+  const cutoffStr = dates[0];
 
   const recentEx = exercises.filter(e => e.date >= cutoffStr);
   const recentNu = nutrition.filter(n => n.date >= cutoffStr);
 
-  const workoutDaySet = new Set(recentEx.map(e => e.date));
   const workoutTypes: Partial<Record<ActivityType, number>> = {};
   for (const e of recentEx) {
     workoutTypes[e.activityType] = (workoutTypes[e.activityType] || 0) + 1;
@@ -398,29 +394,43 @@ export async function getTrailing7DayStats(): Promise<TrailingStats> {
   const nuDays = [...new Set(recentNu.map(n => n.date))];
   const totalCal = recentNu.reduce((s, n) => s + n.calories, 0);
   const totalPro = recentNu.reduce((s, n) => s + n.protein, 0);
+  const totalMinutes = recentEx.reduce((s, e) => s + (e.duration || 0), 0);
+
+  // Per-day protein breakdown
+  const proteinByDay = dates.map(date => {
+    const dayMeals = recentNu.filter(n => n.date === date);
+    return { date, value: dayMeals.reduce((s, m) => s + m.protein, 0) };
+  });
+
+  // Per-day workout types
+  const workoutsByDay = dates.map(date => {
+    const dayEx = recentEx.filter(e => e.date === date);
+    return { date, types: dayEx.map(e => e.activityType) };
+  });
 
   return {
-    workoutDays: workoutDaySet.size,
     totalWorkouts: recentEx.length,
-    workoutMinutes: recentEx.reduce((s, e) => s + (e.duration || 0), 0),
+    workoutMinutes: totalMinutes,
+    totalMinutes,
     workoutTypes,
     avgDailyCalories: nuDays.length > 0 ? Math.round(totalCal / nuDays.length) : 0,
     avgDailyProtein: nuDays.length > 0 ? Math.round(totalPro / nuDays.length) : 0,
     nutritionDays: nuDays.length,
-    currentStreak: getCurrentStreak(exercises),
+    streak: getCurrentStreak(exercises),
+    proteinByDay,
+    workoutsByDay,
   };
 }
 
-// ── Monthly Stats (for bar chart) ─────────────────────
+// ── Monthly Stats (synchronous, takes pre-fetched data) ─
 export interface MonthlyWeekStat {
-  label: string;   // e.g. "Mar 24"
+  weekLabel: string;
   workouts: number;
   avgProtein: number;
+  totalMinutes: number;
 }
 
-export async function getMonthlyStats(): Promise<MonthlyWeekStat[]> {
-  const [exercises, nutrition] = await Promise.all([getExerciseLogs(), getNutritionLogs()]);
-
+export function getMonthlyStats(exercises: ExerciseEntry[], nutrition: NutritionEntry[]): MonthlyWeekStat[] {
   const weeks: MonthlyWeekStat[] = [];
   for (let w = 3; w >= 0; w--) {
     const start = new Date();
@@ -434,78 +444,49 @@ export async function getMonthlyStats(): Promise<MonthlyWeekStat[]> {
     const weekNu = nutrition.filter(n => n.date >= startStr && n.date <= endStr);
     const nuDays = [...new Set(weekNu.map(n => n.date))];
     const totalPro = weekNu.reduce((s, n) => s + n.protein, 0);
+    const totalMin = weekEx.reduce((s, e) => s + (e.duration || 0), 0);
 
     weeks.push({
-      label: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      weekLabel: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       workouts: weekEx.length,
       avgProtein: nuDays.length > 0 ? Math.round(totalPro / nuDays.length) : 0,
+      totalMinutes: totalMin,
     });
   }
   return weeks;
 }
 
-// ── Calendar ───────────────────────────────────────────
+// ── Calendar (synchronous, takes pre-built maps) ───────
 export type DayLogStatus = 'both' | 'exercise' | 'nutrition' | 'none';
 
-export interface CalendarDay {
-  date: string;
-  status: DayLogStatus;
-  isToday: boolean;
-  isCurrentMonth: boolean;
-}
-
-export async function getCalendarDays(year: number, month: number): Promise<CalendarDay[]> {
-  const [exercises, nutrition] = await Promise.all([getExerciseLogs(), getNutritionLogs()]);
-  const exDates = new Set(exercises.map(e => e.date));
-  const nuDates = new Set(nutrition.map(n => n.date));
-  const today = new Date().toISOString().split('T')[0];
-
+export function getCalendarDays(year: number, month: number): (string | null)[] {
   const firstDay = new Date(year, month, 1);
   const lastDay = new Date(year, month + 1, 0);
   const startPad = firstDay.getDay();
-  const days: CalendarDay[] = [];
+  const days: (string | null)[] = [];
 
-  // Pad start
-  for (let i = startPad - 1; i >= 0; i--) {
-    const d = new Date(firstDay);
-    d.setDate(d.getDate() - i - 1);
-    const ds = d.toISOString().split('T')[0];
-    const hasEx = exDates.has(ds), hasNu = nuDates.has(ds);
-    days.push({ date: ds, status: hasEx && hasNu ? 'both' : hasEx ? 'exercise' : hasNu ? 'nutrition' : 'none', isToday: ds === today, isCurrentMonth: false });
-  }
+  for (let i = 0; i < startPad; i++) days.push(null);
 
-  // Current month
   for (let d = 1; d <= lastDay.getDate(); d++) {
-    const ds = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const hasEx = exDates.has(ds), hasNu = nuDates.has(ds);
-    days.push({ date: ds, status: hasEx && hasNu ? 'both' : hasEx ? 'exercise' : hasNu ? 'nutrition' : 'none', isToday: ds === today, isCurrentMonth: true });
+    days.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
   }
 
-  // Pad end to 42
-  while (days.length < 42) {
-    const last = new Date(days[days.length - 1].date + 'T12:00:00');
-    last.setDate(last.getDate() + 1);
-    const ds = last.toISOString().split('T')[0];
-    const hasEx = exDates.has(ds), hasNu = nuDates.has(ds);
-    days.push({ date: ds, status: hasEx && hasNu ? 'both' : hasEx ? 'exercise' : hasNu ? 'nutrition' : 'none', isToday: ds === today, isCurrentMonth: false });
-  }
+  while (days.length % 7 !== 0) days.push(null);
 
   return days;
 }
 
-export async function getDayLogStatus(date: string): Promise<{ exercises: ExerciseEntry[]; meals: NutritionEntry[]; coach: CoachInstruction[] }> {
-  const [exercises, nutrition, coach] = await Promise.all([getExerciseLogs(), getNutritionLogs(), getCoachInstructions()]);
-  return {
-    exercises: exercises.filter(e => e.date === date),
-    meals: nutrition.filter(n => n.date === date),
-    coach: coach.filter(c => c.date === date || (c.weekStart && date >= c.weekStart && date <= addDays(c.weekStart, 6))),
-  };
-}
-
-function addDays(dateStr: string, n: number): string {
-  const d = new Date(dateStr + 'T12:00:00');
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split('T')[0];
+export function getDayLogStatus(
+  date: string,
+  exByDate: Record<string, ExerciseEntry[]>,
+  nuByDate: Record<string, NutritionEntry[]>,
+): DayLogStatus {
+  const hasEx = !!(exByDate[date]?.length);
+  const hasNu = !!(nuByDate[date]?.length);
+  if (hasEx && hasNu) return 'both';
+  if (hasEx) return 'exercise';
+  if (hasNu) return 'nutrition';
+  return 'none';
 }
 
 // ── RAG Indicators ─────────────────────────────────────
@@ -537,7 +518,7 @@ export function getStreakRAG(streak: number): RAGStatus {
   return 'red';
 }
 
-// ── Exercise Progress (for drill-down) ─────────────────
+// ── Exercise Progress (synchronous, takes pre-fetched logs) ─
 export interface ExerciseProgressEntry {
   date: string;
   weight: number;
@@ -545,22 +526,18 @@ export interface ExerciseProgressEntry {
   totalVolume: number;
 }
 
-export async function getAllUniqueExerciseNames(): Promise<string[]> {
-  const cache = loadSECache();
-  const all = Object.values(cache).flat().map(se => se.name);
-  return [...new Set(all)].sort();
-}
-
-export async function getExerciseProgress(exerciseName: string): Promise<ExerciseProgressEntry[]> {
+export function getExerciseProgress(allLogs: ExerciseEntry[], exerciseName: string): ExerciseProgressEntry[] {
   const cache = loadSECache();
   const results: ExerciseProgressEntry[] = [];
 
-  for (const [, structuredExercises] of Object.entries(cache)) {
+  for (const log of allLogs) {
+    const structuredExercises = log.structuredExercises || cache[log.id];
+    if (!structuredExercises) continue;
+
     const match = structuredExercises.find(se => se.name.toLowerCase() === exerciseName.toLowerCase());
     if (match && match.weight !== undefined && match.sets.length > 0) {
-      // Need the date — look up from exercise logs (we'll get it from the exercise logs)
       results.push({
-        date: '', // filled below
+        date: log.date,
         weight: match.weight,
         sets: match.sets,
         totalVolume: match.weight * match.sets.reduce((s, r) => s + r, 0),
@@ -568,26 +545,7 @@ export async function getExerciseProgress(exerciseName: string): Promise<Exercis
     }
   }
 
-  // Enrich with dates from exercise logs
-  const exercises = await getExerciseLogs();
-  const exerciseMap = new Map(exercises.map(e => [e.id, e.date]));
-  const enriched: ExerciseProgressEntry[] = [];
-
-  for (const [id, structuredExercises] of Object.entries(cache)) {
-    const date = exerciseMap.get(id);
-    if (!date) continue;
-    const match = structuredExercises.find(se => se.name.toLowerCase() === exerciseName.toLowerCase());
-    if (match && match.weight !== undefined && match.sets.length > 0) {
-      enriched.push({
-        date,
-        weight: match.weight,
-        sets: match.sets,
-        totalVolume: match.weight * match.sets.reduce((s, r) => s + r, 0),
-      });
-    }
-  }
-
-  return enriched.sort((a, b) => a.date.localeCompare(b.date)).slice(-20);
+  return results.sort((a, b) => a.date.localeCompare(b.date)).slice(-20);
 }
 
 // ── Analytics Helpers ──────────────────────────────────

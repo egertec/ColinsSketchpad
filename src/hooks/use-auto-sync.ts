@@ -42,7 +42,7 @@ export function useAutoSync() {
         d.createdAt < oldest.createdAt ? d : oldest, drafts[0]);
       const oldestDraftDate = oldestDraft.createdAt.split('T')[0];
       const hasPreviousDayDrafts = oldestDraftDate < todayStr;
-      const isPastCutoff = currentHour >= settings.autoSyncHour;
+      const isPastCutoff = currentHour >= settings.cutoffHour;
 
       if (!isPastCutoff && !hasPreviousDayDrafts) {
         setStatus('idle');
@@ -66,7 +66,7 @@ export function useAutoSync() {
 
       let totalParsed = 0;
       for (const [date, group] of Object.entries(byDate)) {
-        const combinedInput = group.map(d => d.raw).join('\n\n---\n\n');
+        const combinedInput = group.map(d => d.rawText).join('\n\n---\n\n');
         const parsed = await parseNaturalLanguageLog(combinedInput, profile);
         for (const e of parsed.exercises) await addExerciseLog({ ...e, date });
         for (const m of parsed.meals) await addNutritionLog({ ...m, date });
