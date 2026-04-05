@@ -187,15 +187,24 @@ export function setStructuredExercisesForLog(id: string, se: StructuredExercise[
 }
 
 // ── Helpers ────────────────────────────────────────────
+// Cached user ID to avoid repeated async calls within a single session
+let _cachedUserId: string = '';
+
+async function getUserIdAsync(): Promise<string> {
+  if (_cachedUserId) return _cachedUserId;
+  const { data: { user } } = await supabase.auth.getUser();
+  _cachedUserId = user?.id || '';
+  return _cachedUserId;
+}
+
+// Listen for auth state changes to update cache
+supabase.auth.onAuthStateChange((_event, session) => {
+  _cachedUserId = session?.user?.id || '';
+});
+
+// Synchronous fallback for backward compat — reads from cache populated by async version
 function getUserId(): string {
-  const storageKey = Object.keys(localStorage).find(k => k.startsWith('sb-') && k.endsWith('-auth-token'));
-  if (storageKey) {
-    try {
-      const data = JSON.parse(localStorage.getItem(storageKey) || '{}');
-      return data?.user?.id || '';
-    } catch { /* fall through */ }
-  }
-  return '';
+  return _cachedUserId;
 }
 
 function mapExerciseRow(r: any): ExerciseEntry {
@@ -239,7 +248,7 @@ function mapProfileRow(r: any): UserProfile {
 
 // ── User Profile ───────────────────────────────────────
 export async function getUserProfile(): Promise<UserProfile> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   if (!userId) return DEFAULT_PROFILE;
   const { data, error } = await supabase.from('user_profiles').select('*').eq('user_id', userId).maybeSingle();
   if (error || !data) return DEFAULT_PROFILE;
@@ -247,7 +256,7 @@ export async function getUserProfile(): Promise<UserProfile> {
 }
 
 export async function saveUserProfile(p: UserProfile): Promise<boolean> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   if (!userId) return false;
   const { error } = await supabase.from('user_profiles').upsert({
     user_id: userId, current_weight: p.currentWeight, goal_weight: p.goalWeight,
@@ -262,7 +271,7 @@ export async function saveUserProfile(p: UserProfile): Promise<boolean> {
 
 // ── Exercise CRUD ──────────────────────────────────────
 export async function getExerciseLogs(): Promise<ExerciseEntry[]> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   if (!userId) return [];
   const { data, error } = await supabase.from('exercise_logs').select('*').eq('user_id', userId).order('date', { ascending: false });
   if (error || !data) return [];
@@ -270,7 +279,7 @@ export async function getExerciseLogs(): Promise<ExerciseEntry[]> {
 }
 
 export async function addExerciseLog(e: Omit<ExerciseEntry, 'id' | 'createdAt'>): Promise<ExerciseEntry> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   const { data, error } = await supabase.from('exercise_logs').insert({
     user_id: userId, date: e.date, activity_type: e.activityType, workout_type: e.workoutType,
     duration: e.duration, exercises: e.exercises || null, sets: e.sets || null,
@@ -287,7 +296,8 @@ export async function addExerciseLog(e: Omit<ExerciseEntry, 'id' | 'createdAt'>)
 }
 
 export async function deleteExerciseLog(id: string) {
-  await supabase.from('exercise_logs').delete().eq('id', id);
+  const userId = await getUserIdAsync();
+  await supabase.from('exercise_logs').delete().eq('id', id).eq('user_id', userId);
   const cache = loadSECache();
   delete cache[id];
   saveSECache(cache);
@@ -295,7 +305,7 @@ export async function deleteExerciseLog(id: string) {
 
 // ── Nutrition CRUD ─────────────────────────────────────
 export async function getNutritionLogs(): Promise<NutritionEntry[]> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   if (!userId) return [];
   const { data, error } = await supabase.from('nutrition_logs').select('*').eq('user_id', userId).order('date', { ascending: false });
   if (error || !data) return [];
@@ -303,7 +313,7 @@ export async function getNutritionLogs(): Promise<NutritionEntry[]> {
 }
 
 export async function addNutritionLog(e: Omit<NutritionEntry, 'id' | 'createdAt'>): Promise<NutritionEntry> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   const { data, error } = await supabase.from('nutrition_logs').insert({
     user_id: userId, date: e.date, meal_type: e.mealType, meal_name: e.mealName,
     calories: e.calories, protein: e.protein, carbs: e.carbs, fat: e.fat, fiber: e.fiber,
@@ -313,12 +323,13 @@ export async function addNutritionLog(e: Omit<NutritionEntry, 'id' | 'createdAt'
 }
 
 export async function deleteNutritionLog(id: string) {
-  await supabase.from('nutrition_logs').delete().eq('id', id);
+  const userId = await getUserIdAsync();
+  await supabase.from('nutrition_logs').delete().eq('id', id).eq('user_id', userId);
 }
 
 // ── Coach Instructions CRUD ────────────────────────────
 export async function getCoachInstructions(): Promise<CoachInstruction[]> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   if (!userId) return [];
   const { data, error } = await supabase.from('coach_instructions').select('*').eq('user_id', userId).order('date', { ascending: false });
   if (error || !data) return [];
@@ -326,7 +337,7 @@ export async function getCoachInstructions(): Promise<CoachInstruction[]> {
 }
 
 export async function addCoachInstruction(e: Omit<CoachInstruction, 'id' | 'createdAt'>): Promise<CoachInstruction> {
-  const userId = getUserId();
+  const userId = await getUserIdAsync();
   const { data, error } = await supabase.from('coach_instructions').insert({
     user_id: userId, date: e.date, type: e.type, title: e.title,
     body: e.body, week_start: e.weekStart || null,
@@ -336,7 +347,8 @@ export async function addCoachInstruction(e: Omit<CoachInstruction, 'id' | 'crea
 }
 
 export async function deleteCoachInstruction(id: string) {
-  await supabase.from('coach_instructions').delete().eq('id', id);
+  const userId = await getUserIdAsync();
+  await supabase.from('coach_instructions').delete().eq('id', id).eq('user_id', userId);
 }
 
 // ── Deduplication ──────────────────────────────────────
