@@ -2,13 +2,12 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   getExerciseLogs, getNutritionLogs, getCoachInstructions, addCoachInstruction, deleteCoachInstruction,
   getUserProfile, saveUserProfile, DEFAULT_PROFILE, getSyncSettings, saveSyncSettings,
   type CoachInstruction, type ExerciseEntry, type NutritionEntry, type UserProfile, type SyncSettings,
 } from '@/lib/storage';
-import { generateWeeklyPlan, generateDailyBriefing } from '@/lib/ai-service';
+import { generateWeeklyPlan } from '@/lib/ai-service';
 
 const FIELDS: { key: keyof UserProfile; label: string; multi?: boolean }[] = [
   { key: 'currentWeight', label: 'Current Weight' }, { key: 'goalWeight', label: 'Goal Weight' },
@@ -62,11 +61,12 @@ export default function InstructionsTab() {
   const [exercises, setExercises] = useState<ExerciseEntry[]>([]);
   const [nutrition, setNutrition] = useState<NutritionEntry[]>([]);
   const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
+  const [profileExpanded, setProfileExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<UserProfile>(DEFAULT_PROFILE);
   const [profileSaved, setProfileSaved] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState<'weekly' | 'daily' | null>(null);
+  const [generating, setGenerating] = useState<'weekly' | null>(null);
   const [selected, setSelected] = useState<CoachInstruction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>({ cutoffHour: 21, lastSyncDate: '' });
@@ -100,25 +100,12 @@ export default function InstructionsTab() {
     } catch (e: any) { setError(e.message || 'Failed.'); } finally { setGenerating(null); }
   }
 
-  async function genDaily() {
-    setGenerating('daily'); setError(null);
-    try {
-      const wp = instructions.filter(i => i.type === 'weekly').sort((a, b) => b.date.localeCompare(a.date));
-      const body = await generateDailyBriefing(exercises, nutrition, wp[0] || null, profile);
-      const today = new Date();
-      const inst = await addCoachInstruction({ date: today.toISOString().split('T')[0], type: 'daily',
-        title: `${today.toLocaleDateString('en-US', { weekday: 'long' })} Briefing — ${today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`, body });
-      setInstructions(prev => [inst, ...prev]); setSelected(inst);
-    } catch (e: any) { setError(e.message || 'Failed.'); } finally { setGenerating(null); }
-  }
-
   async function handleDel(id: string) { await deleteCoachInstruction(id); setInstructions(prev => prev.filter(i => i.id !== id)); setSelected(null); }
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>;
   if (selected) return <div className="pb-4 fade-up"><DetailView inst={selected} onBack={() => setSelected(null)} onDelete={() => handleDel(selected.id)} /></div>;
 
   const wk = instructions.filter(i => i.type === 'weekly');
-  const dl = instructions.filter(i => i.type === 'daily');
 
   return (
     <div className="space-y-5 pb-4">
@@ -129,107 +116,105 @@ export default function InstructionsTab() {
       </div>
 
       {/* Profile */}
-      <div className="card-elevated rounded-xl p-5 space-y-4 fade-up d1">
-        <div className="flex items-center justify-between">
+      <div className="card-elevated rounded-xl fade-up d1">
+        {/* Collapsed header — always visible */}
+        <button
+          onClick={() => { setProfileExpanded(e => !e); if (!profileExpanded) setEditing(false); }}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/[0.02] transition-colors rounded-xl"
+        >
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">My Profile</p>
-          {!editing ? (
-            <div className="flex items-center gap-2">
-              {profileSaved && <span className="text-[10px] text-primary font-semibold">Saved ✓</span>}
-              <button onClick={() => { setDraft(profile); setEditing(true); }} className="text-[11px] font-semibold text-primary hover:underline">Edit</button>
+          <span className="text-muted-foreground text-sm" style={{ transform: profileExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+            ›
+          </span>
+        </button>
+
+        {/* Expanded body */}
+        {profileExpanded && (
+          <div className="px-5 pb-5 space-y-4 border-t border-border/30">
+            <div className="flex items-center justify-between pt-4">
+              <span className="text-[10px] text-muted-foreground/50">Your fitness profile used for plan generation</span>
+              {!editing ? (
+                <div className="flex items-center gap-2">
+                  {profileSaved && <span className="text-[10px] text-primary font-semibold">Saved ✓</span>}
+                  <button onClick={() => { setDraft(profile); setEditing(true); }} className="text-[11px] font-semibold text-primary hover:underline">Edit</button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button onClick={() => setEditing(false)} className="text-[11px] text-muted-foreground hover:text-foreground">Cancel</button>
+                  <button onClick={saveProfile} className="text-[11px] font-semibold text-primary hover:underline">Save</button>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="flex gap-2">
-              <button onClick={() => setEditing(false)} className="text-[11px] text-muted-foreground hover:text-foreground">Cancel</button>
-              <button onClick={saveProfile} className="text-[11px] font-semibold text-primary hover:underline">Save</button>
-            </div>
-          )}
-        </div>
-        {editing ? (
-          <div className="space-y-3">
-            {FIELDS.map(f => (
-              <div key={f.key} className="space-y-1">
-                <label className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold">{f.label}</label>
-                {f.multi
-                  ? <Textarea value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="min-h-[50px] text-sm resize-none rounded-lg" />
-                  : <Input value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="text-sm h-9 rounded-lg" />
-                }
+            {editing ? (
+              <div className="space-y-3">
+                {FIELDS.map(f => (
+                  <div key={f.key} className="space-y-1">
+                    <label className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold">{f.label}</label>
+                    {f.multi
+                      ? <Textarea value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="min-h-[50px] text-sm resize-none rounded-lg" />
+                      : <Input value={draft[f.key]} onChange={e => setDraft(p => ({ ...p, [f.key]: e.target.value }))} className="text-sm h-9 rounded-lg" />
+                    }
+                  </div>
+                ))}
+                <div className="space-y-1 pt-2 border-t border-border/40">
+                  <label className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold">Auto-Sync Time</label>
+                  <div className="flex items-center gap-3">
+                    <select value={syncDraft} onChange={e => setSyncDraft(Number(e.target.value))}
+                      className="text-sm h-9 rounded-lg px-2 appearance-none">
+                      {Array.from({ length: 24 }, (_, i) => (
+                        <option key={i} value={i}>{i === 0 ? '12:00 AM' : i < 12 ? `${i}:00 AM` : i === 12 ? '12:00 PM' : `${i - 12}:00 PM`}</option>
+                      ))}
+                    </select>
+                    <span className="text-[11px] text-muted-foreground/60">Queued entries sync automatically after this time</span>
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground/60 italic">Changes will be used when generating new plans and briefings.</p>
               </div>
-            ))}
-            <div className="space-y-1 pt-2 border-t border-border/40">
-              <label className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold">Auto-Sync Time</label>
-              <div className="flex items-center gap-3">
-                <select value={syncDraft} onChange={e => setSyncDraft(Number(e.target.value))}
-                  className="text-sm h-9 rounded-lg px-2 appearance-none">
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <option key={i} value={i}>{i === 0 ? '12:00 AM' : i < 12 ? `${i}:00 AM` : i === 12 ? '12:00 PM' : `${i - 12}:00 PM`}</option>
-                  ))}
-                </select>
-                <span className="text-[11px] text-muted-foreground/60">Queued entries sync automatically after this time</span>
+            ) : (
+              <div className="space-y-2">
+                {FIELDS.filter(f => profile[f.key]).map(f => (
+                  <div key={f.key} className="flex gap-3">
+                    <span className="text-[9px] uppercase tracking-widest text-muted-foreground/60 font-semibold w-24 shrink-0 pt-0.5">{f.label}</span>
+                    <span className="text-[12px] text-foreground/75 leading-relaxed">{profile[f.key]}</span>
+                  </div>
+                ))}
+                <div className="flex gap-3 pt-2 border-t border-border/30">
+                  <span className="text-[9px] uppercase tracking-widest text-muted-foreground/60 font-semibold w-24 shrink-0 pt-0.5">Auto-Sync</span>
+                  <span className="text-[12px] text-foreground/75 leading-relaxed">
+                    {syncSettings.cutoffHour === 0 ? '12:00 AM' : syncSettings.cutoffHour < 12 ? `${syncSettings.cutoffHour}:00 AM` : syncSettings.cutoffHour === 12 ? '12:00 PM' : `${syncSettings.cutoffHour - 12}:00 PM`}
+                  </span>
+                </div>
               </div>
-            </div>
-            <p className="text-[10px] text-muted-foreground/60 italic">Changes will be used when generating new plans and briefings.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {FIELDS.filter(f => profile[f.key]).map(f => (
-              <div key={f.key} className="flex gap-3">
-                <span className="text-[9px] uppercase tracking-widest text-muted-foreground/60 font-semibold w-24 shrink-0 pt-0.5">{f.label}</span>
-                <span className="text-[12px] text-foreground/75 leading-relaxed">{profile[f.key]}</span>
-              </div>
-            ))}
-            <div className="flex gap-3 pt-2 border-t border-border/30">
-              <span className="text-[9px] uppercase tracking-widest text-muted-foreground/60 font-semibold w-24 shrink-0 pt-0.5">Auto-Sync</span>
-              <span className="text-[12px] text-foreground/75 leading-relaxed">
-                {syncSettings.cutoffHour === 0 ? '12:00 AM' : syncSettings.cutoffHour < 12 ? `${syncSettings.cutoffHour}:00 AM` : syncSettings.cutoffHour === 12 ? '12:00 PM' : `${syncSettings.cutoffHour - 12}:00 PM`}
-              </span>
-            </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Generate buttons */}
-      <div className="grid grid-cols-2 gap-3 fade-up d2">
+      {/* Generate button */}
+      <div className="fade-up d2">
         <button onClick={genWeekly} disabled={generating !== null}
-          className="card-elevated rounded-xl p-4 text-left hover:bg-white/[0.02] transition-colors disabled:opacity-50 flex flex-col justify-end" style={{ height: '90px' }}>
+          className="w-full card-elevated rounded-xl p-4 text-left hover:bg-white/[0.02] transition-colors disabled:opacity-50 flex flex-col justify-end" style={{ height: '90px' }}>
           {generating === 'weekly'
             ? <span className="flex items-center gap-2 text-[12px] font-semibold"><span className="w-3 h-3 border-[1.5px] border-primary border-t-transparent rounded-full animate-spin" />Generating…</span>
-            : <><p className="text-[12px] font-semibold">📋 Weekly Plan</p><p className="text-muted-foreground text-[9px] mt-0.5 leading-snug">7-day training + nutrition</p></>
-          }
-        </button>
-        <button onClick={genDaily} disabled={generating !== null}
-          className="card-elevated rounded-xl p-4 text-left hover:bg-white/[0.02] transition-colors disabled:opacity-50 flex flex-col justify-end" style={{ height: '90px' }}>
-          {generating === 'daily'
-            ? <span className="flex items-center gap-2 text-[12px] font-semibold"><span className="w-3 h-3 border-[1.5px] border-primary border-t-transparent rounded-full animate-spin" />Generating…</span>
-            : <><p className="text-[12px] font-semibold">◆ Daily Briefing</p><p className="text-muted-foreground text-[9px] mt-0.5 leading-snug">Today's workout + review</p></>
+            : <><p className="text-[12px] font-semibold">📋 Generate Weekly Plan</p><p className="text-muted-foreground text-[9px] mt-0.5 leading-snug">7-day training + nutrition based on your profile & history</p></>
           }
         </button>
       </div>
 
       {error && <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 fade-up"><p className="text-sm text-red-400">{error}</p></div>}
 
-      {/* List */}
-      <Tabs defaultValue="all" className="fade-up d3">
-        <TabsList className="w-full rounded-xl p-1 h-auto">
-          <TabsTrigger value="all" className="flex-1 text-[11px] rounded-lg py-1.5 font-semibold">All ({instructions.length})</TabsTrigger>
-          <TabsTrigger value="weekly" className="flex-1 text-[11px] rounded-lg py-1.5 font-semibold">Weekly ({wk.length})</TabsTrigger>
-          <TabsTrigger value="daily" className="flex-1 text-[11px] rounded-lg py-1.5 font-semibold">Daily ({dl.length})</TabsTrigger>
-        </TabsList>
-        {(['all', 'weekly', 'daily'] as const).map(tab => (
-          <TabsContent key={tab} value={tab} className="mt-4">
-            {(() => {
-              const items = tab === 'all' ? instructions : tab === 'weekly' ? wk : dl;
-              if (items.length === 0) return (
-                <div className="card-elevated rounded-xl py-14 text-center">
-                  <p className="text-4xl mb-3">{tab === 'weekly' ? '📋' : tab === 'daily' ? '◆' : '◎'}</p>
-                  <h3 className="text-lg font-semibold mb-1">No Instructions Yet</h3>
-                  <p className="text-sm text-muted-foreground max-w-[260px] mx-auto">Generate your first plan above.</p>
-                </div>
-              );
-              return <div className="space-y-2">{items.map(i => <InstCard key={i.id} inst={i} onClick={() => setSelected(i)} />)}</div>;
-            })()}
-          </TabsContent>
-        ))}
-      </Tabs>
+      {/* Weekly Plans List */}
+      <div className="fade-up d3">
+        {wk.length === 0 ? (
+          <div className="card-elevated rounded-xl py-14 text-center">
+            <p className="text-4xl mb-3">📋</p>
+            <h3 className="text-lg font-semibold mb-1">No Weekly Plans Yet</h3>
+            <p className="text-sm text-muted-foreground max-w-[260px] mx-auto">Generate your first plan above.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">{wk.map(i => <InstCard key={i.id} inst={i} onClick={() => setSelected(i)} />)}</div>
+        )}
+      </div>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import {
   getExerciseLogs, getNutritionLogs,
   getTrailing7DayStats, getMonthlyStats,
   getProteinRAG, getWorkoutRAG, getCalorieRAG, getStreakRAG,
-  RAG_COLORS, getDayLabel,
+  RAG_COLORS, getDayLabel, getLast7Dates,
   ACTIVITY_META,
   type ExerciseEntry, type NutritionEntry, type ActivityType, type RAGStatus,
 } from '@/lib/storage';
@@ -151,6 +151,76 @@ function WeeklyActivityRow({ data }: { data: { date: string; types: ActivityType
   );
 }
 
+function WeeklyNutritionRow({ nutrition }: { nutrition: NutritionEntry[] }) {
+  const dates = getLast7Dates();
+  const today = new Date().toISOString().split('T')[0];
+
+  const nuByDate: Record<string, NutritionEntry[]> = {};
+  for (const n of nutrition) (nuByDate[n.date] ??= []).push(n);
+
+  return (
+    <div className="card-elevated rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-[11px] uppercase tracking-widest text-muted-foreground font-semibold">Nutrition · 7 Days</p>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: 'hsl(14,80%,55%)' }} />
+            <span className="text-[9px] text-muted-foreground">Logged</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: 'rgba(248,113,113,0.5)' }} />
+            <span className="text-[9px] text-muted-foreground">Missing</span>
+          </div>
+        </div>
+      </div>
+      <div className="flex items-start gap-3 justify-between">
+        {dates.map((date, i) => {
+          const meals = nuByDate[date] || [];
+          const logged = meals.length > 0;
+          const isPast = date < today;
+          const missing = isPast && !logged;
+          const totalCal = meals.reduce((s, m) => s + m.calories, 0);
+          const totalPro = meals.reduce((s, m) => s + m.protein, 0);
+          const proColor = totalPro >= 165 ? '#34d399' : totalPro >= 130 ? '#fbbf24' : '#f87171';
+
+          return (
+            <div key={i} className="flex flex-col items-center gap-2">
+              <div
+                className="w-10 h-10 rounded-xl flex flex-col items-center justify-center transition-all"
+                style={{
+                  backgroundColor: logged
+                    ? 'hsl(14,80%,55%)'
+                    : missing
+                      ? 'rgba(248,113,113,0.10)'
+                      : 'rgba(255,255,255,0.04)',
+                  border: missing ? '1px solid rgba(248,113,113,0.25)' : '1px solid transparent',
+                  boxShadow: logged ? '0 2px 8px hsl(14,80%,55%,0.3)' : 'none',
+                }}
+              >
+                {logged ? (
+                  <span className="text-[8px] font-bold text-white leading-none tabular-nums">{totalCal}</span>
+                ) : missing ? (
+                  <span className="text-[12px]" style={{ color: '#f87171' }}>!</span>
+                ) : (
+                  <span className="text-sm" style={{ color: 'rgba(255,255,255,0.15)' }}>·</span>
+                )}
+              </div>
+              {logged ? (
+                <span className="text-[9px] mono font-semibold tabular-nums" style={{ color: proColor }}>
+                  {totalPro}g
+                </span>
+              ) : (
+                <span className="text-[9px] text-transparent select-none">—</span>
+              )}
+              <span className="text-[10px] text-muted-foreground font-medium">{getDayLabel(date)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MonthlyOverview({ data }: { data: { weekLabel: string; workouts: number; avgProtein: number; totalMinutes: number }[] }) {
   if (data.every(w => w.workouts === 0 && w.avgProtein === 0)) return null;
 
@@ -284,6 +354,11 @@ export default function DashboardTab() {
           {/* Weekly Activity */}
           <div className="fade-up d3">
             <WeeklyActivityRow data={stats.workoutsByDay} />
+          </div>
+
+          {/* Weekly Nutrition */}
+          <div className="fade-up d3">
+            <WeeklyNutritionRow nutrition={nu} />
           </div>
 
           {/* Monthly Overview */}

@@ -207,6 +207,27 @@ function getUserId(): string {
   return _cachedUserId;
 }
 
+// Parse structured exercises from legacy comma-separated columns (no AI required)
+function parseExercisesFromColumns(entry: ExerciseEntry): StructuredExercise[] {
+  if (!entry.exercises) return [];
+  const names = entry.exercises.split(',').map(s => s.trim()).filter(Boolean);
+  if (names.length === 0) return [];
+  const setsCounts = entry.sets ? entry.sets.split(',').map(s => parseInt(s.trim()) || 0) : [];
+  const repsList = entry.reps ? entry.reps.split(',').map(s => s.trim()) : [];
+  const weightList = entry.weight ? entry.weight.split(',').map(s => s.trim()) : [];
+  return names.map((name, i) => {
+    const numSets = setsCounts[i] || 3;
+    const repsMatch = (repsList[i] || '').match(/^(\d+)/);
+    const repsNum = repsMatch ? parseInt(repsMatch[1]) : 0;
+    const sets = repsNum > 0 ? Array<number>(numSets).fill(repsNum) : [];
+    const wMatch = (weightList[i] || '').match(/^(\d+(?:\.\d+)?)/);
+    const weightNum = wMatch ? parseFloat(wMatch[1]) : undefined;
+    const result: StructuredExercise = { name, sets };
+    if (weightNum !== undefined) result.weight = weightNum;
+    return result;
+  }).filter(se => se.sets.length > 0);
+}
+
 function mapExerciseRow(r: any): ExerciseEntry {
   const entry: ExerciseEntry = {
     id: r.id, date: r.date, activityType: r.activity_type, workoutType: r.workout_type,
@@ -216,7 +237,12 @@ function mapExerciseRow(r: any): ExerciseEntry {
     runningType: r.running_type || undefined, notes: r.notes || undefined, createdAt: r.created_at,
   };
   const cache = loadSECache();
-  if (cache[r.id]) entry.structuredExercises = cache[r.id];
+  if (cache[r.id]) {
+    entry.structuredExercises = cache[r.id];
+  } else {
+    const fromCols = parseExercisesFromColumns(entry);
+    if (fromCols.length > 0) entry.structuredExercises = fromCols;
+  }
   return entry;
 }
 
