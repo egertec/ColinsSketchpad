@@ -146,6 +146,19 @@ export function removeDraftLogs(ids: string[]) {
   saveDrafts(loadDrafts().filter(d => !set.has(d.id)));
 }
 
+export function updateDraftLog(id: string, updates: Partial<Pick<DraftLogEntry, 'rawText' | 'date' | 'tags'>>) {
+  const drafts = loadDrafts();
+  const idx = drafts.findIndex(d => d.id === id);
+  if (idx === -1) return;
+  const updated = { ...drafts[idx], ...updates };
+  // Re-derive type from tags if tags changed
+  if (updates.tags) {
+    updated.type = updates.tags.some(t => ['Lifting','Running','Soccer','Golf','Hiking','Biking','Skiing','Other'].includes(t)) ? 'exercise' : 'nutrition';
+  }
+  drafts[idx] = updated;
+  saveDrafts(drafts);
+}
+
 // ── Sync Settings (localStorage) ──────────────────────
 export interface SyncSettings {
   cutoffHour: number;

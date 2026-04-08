@@ -5,7 +5,7 @@ import { parseNaturalLanguageLog, type ParseResult } from '@/lib/ai-service';
 import {
   addExerciseLog, addNutritionLog, getNutritionLogs, getUserProfile,
   ACTIVITY_META, type NutritionEntry, type UserProfile, type ActivityType,
-  getDraftLogs, addDraftLog, removeDraftLogs, getSyncSettings, saveSyncSettings,
+  getDraftLogs, addDraftLog, removeDraftLogs, updateDraftLog, getSyncSettings, saveSyncSettings,
   acquireSyncLock, releaseSyncLock, isSyncLocked,
   type DraftLogEntry,
 } from '@/lib/storage';
@@ -49,6 +49,9 @@ export default function LogTab() {
   const [drafts, setDrafts] = useState<DraftLogEntry[]>([]);
   const [syncSuccess, setSyncSuccess] = useState(false);
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [editDate, setEditDate] = useState('');
   const freeRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { loadCtx(); }, [recentLogs]);
@@ -265,17 +268,76 @@ export default function LogTab() {
             <span className="text-[9px] text-muted-foreground/50 italic">syncs automatically at end of day</span>
           </div>
           {drafts.map(d => {
-            const preview = d.rawText.length > 120 ? d.rawText.slice(0, 120) + '…' : d.rawText;
+            const isEditing = editingId === d.id;
             const age = Date.now() - new Date(d.createdAt).getTime();
             const isNew = age < 3000;
+            const today = new Date().toISOString().split('T')[0];
+
+            if (isEditing) {
+              return (
+                <div key={d.id} className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-widest text-primary font-semibold">Editing Entry</span>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <Textarea
+                    value={editText}
+                    onChange={e => setEditText(e.target.value)}
+                    className="min-h-[80px] text-sm resize-none rounded-lg"
+                    autoFocus
+                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={editDate}
+                      onChange={e => setEditDate(e.target.value)}
+                      max={today}
+                      className="h-8 rounded-lg px-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 flex-1"
+                    />
+                    <Button
+                      onClick={() => {
+                        if (!editText.trim()) return;
+                        updateDraftLog(d.id, { rawText: editText.trim(), date: editDate });
+                        setDrafts(prev => prev.map(x => x.id === d.id ? { ...x, rawText: editText.trim(), date: editDate } : x));
+                        setEditingId(null);
+                      }}
+                      className="h-8 px-4 rounded-lg text-[12px] font-semibold accent-gradient text-white border-0"
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              );
+            }
+
+            const preview = d.rawText.length > 100 ? d.rawText.slice(0, 100) + '…' : d.rawText;
             return (
               <div key={d.id} className={`rounded-xl border transition-all ${isNew ? 'border-amber-500/30 bg-amber-500/5' : 'border-border/60 bg-card/60'}`}>
                 <div className="px-4 py-2.5 flex items-center gap-2">
                   <span className="text-amber-500 text-xs font-bold">⏳</span>
                   <span className="text-[12px] text-foreground/70 flex-1 truncate">{preview}</span>
-                  <span className="text-[9px] text-muted-foreground/50 mono shrink-0 ml-1">
-                    {d.date === new Date().toISOString().split('T')[0] ? 'today' : d.date}
+                  <span className="text-[9px] text-muted-foreground/50 mono shrink-0">
+                    {d.date === today ? 'today' : d.date}
                   </span>
+                </div>
+                <div className="px-4 pb-2.5 flex items-center gap-3">
+                  <button
+                    onClick={() => { setEditingId(d.id); setEditText(d.rawText); setEditDate(d.date); }}
+                    className="text-[10px] text-primary hover:underline font-semibold"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => { removeDraftLogs([d.id]); setDrafts(prev => prev.filter(x => x.id !== d.id)); }}
+                    className="text-[10px] text-muted-foreground/50 hover:text-destructive transition-colors"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             );
