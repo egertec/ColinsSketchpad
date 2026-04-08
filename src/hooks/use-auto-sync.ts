@@ -30,19 +30,22 @@ export function useAutoSync() {
       }
 
       const now = new Date();
-      const todayStr = now.toISOString().split('T')[0];
+      // Use local date string to avoid UTC offset shifting the date after ~7pm
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const currentHour = now.getHours();
-
-      if (settings.lastSyncDate === todayStr) {
-        setStatus('idle');
-        return;
-      }
 
       const oldestDraft = drafts.reduce((oldest, d) =>
         d.createdAt < oldest.createdAt ? d : oldest, drafts[0]);
       const oldestDraftDate = oldestDraft.createdAt.split('T')[0];
       const hasPreviousDayDrafts = oldestDraftDate < todayStr;
       const isPastCutoff = currentHour >= settings.cutoffHour;
+
+      // Skip only if we already synced today AND no old drafts remain
+      // (don't skip if rate-limit cut us short and previous-day drafts are still queued)
+      if (settings.lastSyncDate === todayStr && !hasPreviousDayDrafts) {
+        setStatus('idle');
+        return;
+      }
 
       if (!isPastCutoff && !hasPreviousDayDrafts) {
         setStatus('idle');

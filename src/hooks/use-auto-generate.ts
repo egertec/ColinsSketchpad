@@ -7,12 +7,16 @@ import { generateWeeklyPlan } from '@/lib/ai-service';
 
 export type AutoGenStatus = 'idle' | 'checking' | 'generating-weekly' | 'done' | 'error';
 
+function toLocalDateStr(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 function getWeekMonday(date: Date): string {
   const d = new Date(date);
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1);
   d.setDate(diff);
-  return d.toISOString().split('T')[0];
+  return toLocalDateStr(d);
 }
 
 export function useAutoGenerate() {
@@ -47,7 +51,7 @@ export function useAutoGenerate() {
         getCoachInstructions(), getExerciseLogs(), getNutritionLogs(), getUserProfile(),
       ]);
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
+      const todayStr = toLocalDateStr(today);
       const thisMonday = getWeekMonday(today);
 
       const weeklyPlans = instructions.filter(i => i.type === 'weekly');

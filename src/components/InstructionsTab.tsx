@@ -86,16 +86,31 @@ export default function InstructionsTab() {
     setProfileSaved(true); setTimeout(() => setProfileSaved(false), 2500);
   }
 
+  function toLocalDateStr(date: Date): string {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  function getWeekMonday(date: Date): Date {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    d.setDate(diff);
+    return d;
+  }
+
   async function genWeekly() {
     setGenerating('weekly'); setError(null);
     try {
+      const today = new Date();
+      const mon = getWeekMonday(today);
+      const monStr = toLocalDateStr(mon);
+      // Guard: don't generate if a plan for this week already exists
+      const alreadyHas = instructions.some(i => i.type === 'weekly' && (i.weekStart === monStr || (i.date >= monStr && i.date <= toLocalDateStr(today))));
+      if (alreadyHas) { setError('A weekly plan for this week already exists.'); setGenerating(null); return; }
       const body = await generateWeeklyPlan(exercises, nutrition, instructions, profile);
-      const today = new Date(); const dow = today.getDay();
-      const mOff = dow === 0 ? 1 : dow === 1 ? 0 : 8 - dow;
-      const mon = new Date(today); mon.setDate(today.getDate() + mOff);
-      const inst = await addCoachInstruction({ date: today.toISOString().split('T')[0], type: 'weekly',
+      const inst = await addCoachInstruction({ date: toLocalDateStr(today), type: 'weekly',
         title: `Weekly Plan — Week of ${mon.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
-        body, weekStart: mon.toISOString().split('T')[0] });
+        body, weekStart: monStr });
       setInstructions(prev => [inst, ...prev]); setSelected(inst);
     } catch (e: any) { setError(e.message || 'Failed.'); } finally { setGenerating(null); }
   }
