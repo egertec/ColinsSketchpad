@@ -34,10 +34,9 @@ export function useAutoSync() {
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const currentHour = now.getHours();
 
-      const oldestDraft = drafts.reduce((oldest, d) =>
-        d.createdAt < oldest.createdAt ? d : oldest, drafts[0]);
-      const oldestDraftDate = oldestDraft.createdAt.split('T')[0];
-      const hasPreviousDayDrafts = oldestDraftDate < todayStr;
+      // Use d.date (the log date the user selected), not createdAt (UTC timestamp)
+      // createdAt after ~7pm CDT would read as tomorrow in UTC, breaking the check
+      const hasPreviousDayDrafts = drafts.some(d => d.date < todayStr);
       const isPastCutoff = currentHour >= settings.cutoffHour;
 
       // Skip only if we already synced today AND no old drafts remain

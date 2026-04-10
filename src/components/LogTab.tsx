@@ -35,6 +35,10 @@ const PH: Partial<Record<TagId, string>> = {
   dinner: 'Pesto pasta with chicken, tomatoes, parmesan', snack: 'Greek yogurt with berries, protein shake',
 };
 
+function localDateStr(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export default function LogTab() {
   const [selectedTags, setSelectedTags] = useState<TagId[]>([]);
   const [sections, setSections] = useState<SectionInput[]>([]);
@@ -48,7 +52,7 @@ export default function LogTab() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [drafts, setDrafts] = useState<DraftLogEntry[]>([]);
   const [syncSuccess, setSyncSuccess] = useState(false);
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [entryDate, setEntryDate] = useState(() => localDateStr());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [editDate, setEditDate] = useState('');
@@ -57,7 +61,7 @@ export default function LogTab() {
   useEffect(() => { loadCtx(); }, [recentLogs]);
   async function loadCtx() {
     const nu = await getNutritionLogs();
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDateStr();
     setTodayP(nu.filter((n: NutritionEntry) => n.date === today).reduce((s: number, m: NutritionEntry) => s + m.protein, 0));
     setProfile(await getUserProfile());
     setDrafts(await getDraftLogs());
@@ -85,7 +89,7 @@ export default function LogTab() {
       const draft = await addDraftLog(input, [...selectedTags], entryDate);
       setDrafts(prev => [draft, ...prev]);
       setSelectedTags([]); setSections([]); setFreeform('');
-      setEntryDate(new Date().toISOString().split('T')[0]);
+      setEntryDate(localDateStr());
     } catch (e: any) { setError(e.message || 'Failed to save draft.'); }
     finally { setProcessing(false); }
   }
@@ -120,7 +124,7 @@ export default function LogTab() {
       }
 
       const settings = await getSyncSettings();
-      settings.lastSyncDate = new Date().toISOString().split('T')[0];
+      settings.lastSyncDate = localDateStr();
       await saveSyncSettings(settings);
 
       releaseSyncLock();
@@ -174,13 +178,13 @@ export default function LogTab() {
       <div className="fade-up d1">
         <div className="flex items-center justify-between">
           <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Date</p>
-          {entryDate !== new Date().toISOString().split('T')[0] && (
-            <button onClick={() => setEntryDate(new Date().toISOString().split('T')[0])}
+          {entryDate !== localDateStr() && (
+            <button onClick={() => setEntryDate(localDateStr())}
               className="text-[10px] text-primary hover:underline font-medium">Today</button>
           )}
         </div>
         <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)}
-          max={new Date().toISOString().split('T')[0]}
+          max={localDateStr()}
           className="mt-1.5 w-full h-9 rounded-lg px-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40" />
       </div>
 
@@ -271,7 +275,7 @@ export default function LogTab() {
             const isEditing = editingId === d.id;
             const age = Date.now() - new Date(d.createdAt).getTime();
             const isNew = age < 3000;
-            const today = new Date().toISOString().split('T')[0];
+            const today = localDateStr();
 
             if (isEditing) {
               return (
@@ -296,7 +300,7 @@ export default function LogTab() {
                       type="date"
                       value={editDate}
                       onChange={e => setEditDate(e.target.value)}
-                      max={today}
+                      max={localDateStr()}
                       className="h-8 rounded-lg px-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 flex-1"
                     />
                     <Button
